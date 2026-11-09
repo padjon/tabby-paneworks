@@ -52,7 +52,17 @@ interface WorkspaceTabState {
   editingPaneId: string | null
   menuOpen: boolean
   timer: ReturnType<typeof setInterval> | null
+  /** "NEW": panes with output since they left the screen (after the grace period). */
+  unseen: Set<string>
+  /** When each pane last left the screen. */
+  leftAt: Map<string, number>
 }
+
+/**
+ * Output in the first moments after a pane leaves the screen is ignored for "NEW":
+ * a layout change resizes terminals, and shells / tmux redraw on resize.
+ */
+const NEW_OUTPUT_GRACE_MS = 2500
 
 // Tabby internals used here (stable across 1.0.x, not in the public typings):
 // split.viewRefs, split.attachTabView(), split.onAfterTabAdded(), split.replaceTab(),
@@ -74,6 +84,7 @@ export class LayoutService {
   private active = new Set<WorkspaceTabState>()
   private resizeTimer: ReturnType<typeof setTimeout> | null = null
   private profiles: TabbyProfile[] = []
+  private watchedSessions = new WeakSet<object>()
 
   constructor(
     private app: AppService,
@@ -171,6 +182,8 @@ export class LayoutService {
       editingPaneId: null,
       menuOpen: false,
       timer: null,
+      unseen: new Set(),
+      leftAt: new Map(),
     }
     this.states.set(split, state)
     this.active.add(state)
@@ -273,8 +286,12 @@ export class LayoutService {
           tab.removeFromContainer()
           split.viewRefs?.delete(tab)
           tab.parent = null
-          if (id) state.parked.set(id, tab)
-          else tab.destroy() // not a workspace pane (e.g. a manual split): close it
+          if (id) {
+            state.parked.set(id, tab)
+            state.leftAt.set(id, Date.now())
+          } else {
+            tab.destroy() // not a workspace pane (e.g. a manual split): close it
+          }
         }
       }
 
@@ -283,9 +300,11 @@ export class LayoutService {
       split.maximizedTab = null
       split.root = root
 
-      // Attach the panes that enter the split
+      // Attach the panes that enter the split; on screen = seen
       for (const id of shown) {
         const tab = live.get(id)!
+        state.unseen.delete(id)
+        tab.clearActivity()
         if (!split.viewRefs?.has(tab)) {
           state.parked.delete(id)
           tab.parent = state.split
@@ -582,9 +601,27 @@ export class LayoutService {
     })
   }
 
+  /**
+   * Subscribes once to each pane's terminal output for "NEW": output while the pane
+   * is off screen, after the grace period, marks it until the pane is shown again.
+   */
+  private watchOutput(state: WorkspaceTabState): void {
+    for (const [id, tab] of this.livePanes(state)) {
+      const session = (tab as Any).session
+      if (!session?.output$ || this.watchedSessions.has(session)) continue
+      this.watchedSessions.add(session)
+      session.output$.subscribe(() => {
+        if (tab.parent === state.split || state.unseen.has(id)) return // on screen, or already marked
+        if (Date.now() - (state.leftAt.get(id) ?? 0) < NEW_OUTPUT_GRACE_MS) return
+        state.unseen.add(id)
+      })
+    }
+  }
+
   private render(state: WorkspaceTabState, force = false): void {
     const el = state.sidebar
     if (!el || !el.isConnected || state.dragging) return
+    this.watchOutput(state)
     this.applyLabelColors(state, this.workspaces.getWorkspace(state.workspaceId))
     if (!force && (state.editingPaneId || state.menuOpen)) return
     const workspace = this.workspaces.getWorkspace(state.workspaceId)
@@ -596,7 +633,7 @@ export class LayoutService {
       state.collapsed, state.view, state.editingPaneId, state.menuOpen, workspace,
       workspace?.panes.map((p) => {
         const tab = live.get(p.id)
-        return [tab?.customTitle, tab?.title, tab?.hasActivity, onScreen.has(p.id)]
+        return [tab?.customTitle, tab?.title, state.unseen.has(p.id), onScreen.has(p.id)]
       }),
     ])
     if (!force && (el as Any).__pwSignature === signature) return
@@ -672,7 +709,7 @@ export class LayoutService {
     const title = (tab ? (tab.customTitle || tab.title) : '') || pane.name || pane.startupCommand || 'New pane'
     const sub = [pane.name, pane.startupCommand].filter(Boolean).join(' · ')
     const noRoom = !pane.hidden && !onScreen && state.view.kind === 'all'
-    const hasNews = !!tab && tab.hasActivity && !onScreen
+    const hasNews = !onScreen && state.unseen.has(pane.id)
 
     const classes = ['pw-row', 'pw-pane']
     if (onScreen) classes.push('onscreen')
