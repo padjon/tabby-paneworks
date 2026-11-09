@@ -113,6 +113,9 @@ export class LayoutService {
     if (!workspace || !area) return
     const plan = this.workspaces.planViewAll(workspace, area.width, area.height)
     const signature = JSON.stringify(plan.tree)
+    if (signature !== state.appliedPlan) {
+      console.log(`[${DISPLAY_NAME}] View all:`, { area, shown: plan.shown.length, min: this.workspaces.minPaneSize(workspace) })
+    }
     const wasAll = state.view.kind === 'all'
     state.view = { kind: 'all' }
     if (plan.tree && (force || !wasAll || signature !== state.appliedPlan)) {
@@ -291,23 +294,41 @@ export class LayoutService {
 
   // ---------- sidebar ----------
 
+  /**
+   * DOM element of the workspace tab. Tabby's tab-body inserts a top-level tab's
+   * `hostView` directly (viewContainerEmbeddedRef is only set for panes inside a split).
+   */
   private splitElement(state: WorkspaceTabState): HTMLElement | null {
-    const el = (state.split as Any).viewContainerEmbeddedRef?.rootNodes?.[0]
-    return el instanceof HTMLElement ? el : null
+    const split = state.split as Any
+    for (const ref of [split.hostView, split.viewContainerEmbeddedRef]) {
+      const el = ref?.rootNodes?.[0]
+      if (el instanceof HTMLElement) return el
+    }
+    return null
   }
 
   private mountSidebar(state: WorkspaceTabState): void {
     const splitEl = this.splitElement(state)
     const host = splitEl?.parentElement
-    if (!splitEl || !host) return // not in the DOM yet; the next scan of the split retries
+    if (!splitEl || !host) {
+      // Not in the DOM yet: retry shortly (also retried by every scan of the split)
+      console.log(`[${DISPLAY_NAME}] Sidebar: workspace tab not in the DOM yet, retrying`, { hasElement: !!splitEl })
+      setTimeout(() => {
+        if (!state.sidebar?.isConnected && this.active.has(state)) this.mountSidebar(state)
+      }, 500)
+      return
+    }
     if (!state.sidebar) {
       state.sidebar = document.createElement('div')
       state.sidebar.className = 'paneworks-sidebar'
       this.ensureStyles()
     }
     host.insertBefore(state.sidebar, splitEl)
+    console.log(`[${DISPLAY_NAME}] Sidebar mounted`, { workspaceId: state.workspaceId, host: host.tagName })
     this.render(state, true)
     this.nudgeResize()
+    // The pane area is known now: fit the grid to it
+    setTimeout(() => this.refreshGrid(state), 100)
   }
 
   private render(state: WorkspaceTabState, force = false): void {
