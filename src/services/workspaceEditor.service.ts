@@ -14,7 +14,6 @@ import {
   normalizeWorkspace,
   planGrid,
   gridTree,
-  layoutPaneIds,
   DEFAULT_MIN_PANE_WIDTH,
   DEFAULT_MIN_PANE_HEIGHT,
 } from '../models/workspace.model'
@@ -89,11 +88,22 @@ export class WorkspaceEditorService {
     return { tree: shown.length ? gridTree(shown, rows) : null, shown }
   }
 
-  /** The grid a workspace opens with, estimated from the window size. */
+  /**
+   * Grid with every pane of a workspace, switched off ones included, ignoring the
+   * minimum size. A workspace opens with it: Tabby starts a terminal's shell only once
+   * the terminal has been on screen, and every pane must run. The sidebar then switches
+   * to "View all" (see LayoutService.startAllPanes).
+   */
+  allPanesLayout(workspace: Workspace, width?: number, height?: number): LayoutSplit | null {
+    const ids = workspace.panes.map((p) => p.id)
+    if (!ids.length) return null
+    const w = Math.max(1, width ?? window.innerWidth - SIDEBAR_WIDTH)
+    const h = Math.max(1, height ?? window.innerHeight - CHROME_HEIGHT)
+    return gridTree(ids, planGrid(ids.length, w, h, 1, 1))
+  }
+
   private initialLayout(workspace: Workspace): LayoutSplit | null {
-    const width = Math.max(1, window.innerWidth - SIDEBAR_WIDTH)
-    const height = Math.max(1, window.innerHeight - CHROME_HEIGHT)
-    return this.planViewAll(workspace, width, height).tree
+    return this.allPanesLayout(workspace)
   }
 
   /**
@@ -340,12 +350,10 @@ export class WorkspaceEditorService {
     return this.cachedProfiles?.find((p) => p.id === profileId)
   }
 
-  /** Startup commands of the panes a workspace opens with. */
+  /** Startup commands of all panes (a workspace opens with all of them). */
   collectStartupCommands(workspace: Workspace): PendingCommand[] {
-    const tree = this.initialLayout(workspace)
-    const opened = new Set(tree ? layoutPaneIds(tree) : [])
     return workspace.panes
-      .filter((p) => opened.has(p.id) && p.startupCommand)
+      .filter((p) => p.startupCommand)
       .map((p) => ({ paneId: p.id, command: p.startupCommand }))
   }
 

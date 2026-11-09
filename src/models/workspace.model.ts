@@ -155,28 +155,11 @@ export function gridTree(paneIds: string[], rows: number[]): LayoutSplit {
   return { orientation: 'vertical', ratios: rowNodes.map(() => 1 / rowNodes.length), children: rowNodes }
 }
 
-/**
- * Brings a stored workspace to the current shape: workspaces saved with a pane tree
- * (`root`, TabbySpaces style) get their panes as a flat list in reading order.
- */
+/** Makes sure a stored workspace has a pane list (e.g. one edited by hand in config.yaml). */
 export function normalizeWorkspace(workspace: Workspace): Workspace {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const legacy = workspace as any
   if (!Array.isArray(workspace.panes)) {
-    const panes: WorkspacePane[] = []
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const walk = (node: any) => {
-      if (!node) return
-      if (Array.isArray(node.children)) node.children.forEach(walk)
-      else if (node.id) panes.push(node)
-    }
-    walk(legacy.root)
-    workspace.panes = [...panes, ...(legacy.extraPanes ?? [])]
+    workspace.panes = []
   }
-  delete legacy.root
-  delete legacy.extraPanes
-  delete legacy.layouts
-  delete legacy.mainLayoutName
   return workspace
 }
 

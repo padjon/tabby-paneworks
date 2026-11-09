@@ -1,16 +1,19 @@
 {
   "name": "tabby-paneworks",
-  "version": "0.3.0",
-  "description": "Workspaces for Tabby: terminal panes with startup commands, arranged automatically by a minimum pane size, managed from a sidebar (focus view, on/off, drag-and-drop order). Panes show their program title; the tab shows the workspace name.",
+  "version": "1.0.0",
+  "description": "Workspaces for Tabby: terminal panes with startup commands, arranged automatically by a minimum pane size and managed from a sidebar (focus view, on/off switches, drag-and-drop order, label colours). Panes show their program title; the tab shows the workspace name.",
   "keywords": [
     "tabby",
     "tabby-plugin",
     "workspace",
     "workspaces",
+    "panes",
     "split",
     "layout",
-    "panes",
-    "startup-command"
+    "grid",
+    "sidebar",
+    "startup-command",
+    "terminal"
   ],
   "main": "dist/index.js",
   "type": "commonjs",
@@ -58,7 +61,7 @@
     "webpack-cli": "^5.1.0",
     "zone.js": "^0.13.0"
   },
-  "author": "Patrick Schaefer (fork of TabbySpaces by Igor Halilovic)",
+  "author": "Patrick Schäfer",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -71,6 +74,6 @@
   "tabbyPlugin": {
     "name": "paneworks",
     "displayName": "Paneworks",
-    "description": "Workspaces for Tabby: terminal panes with startup commands, arranged automatically by a minimum pane size, managed from a sidebar (focus view, on/off, drag-and-drop order). Panes show their program title; the tab shows the workspace name."
+    "description": "Workspaces for Tabby: terminal panes with startup commands, arranged automatically by a minimum pane size and managed from a sidebar (focus view, on/off switches, drag-and-drop order, label colours). Panes show their program title; the tab shows the workspace name."
   }
 }

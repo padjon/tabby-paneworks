@@ -56,7 +56,12 @@ interface WorkspaceTabState {
   unseen: Set<string>
   /** When each pane last left the screen. */
   leftAt: Map<string, number>
+  /** Starting all panes after the tab opened; the grid waits until that is done. */
+  starting: boolean
 }
+
+/** How long opening waits for every pane's shell before switching to "View all". */
+const START_TIMEOUT_MS = 8000
 
 /**
  * Output in the first moments after a pane leaves the screen is ignored for "NEW":
@@ -128,18 +133,9 @@ export class LayoutService {
     if (!workspace) return
     const commands = this.workspaces.collectStartupCommands(workspace)
     if (commands.length) this.runtime.registerCommands(commands)
+    // Opens with all panes on screen; the sidebar then switches to "View all"
     const profile = await this.workspaces.generateTabbyProfile(workspace)
-    if (profile) {
-      this.profilesService.openNewTabForProfile(profile as Any)
-    } else {
-      // Nothing switched on: open the first pane so the tab (and its sidebar) exists
-      const first = workspace.panes[0]
-      if (!first) return
-      first.hidden = false
-      delete first.hidden
-      await this.workspaces.saveWorkspaceQuietly(workspace)
-      await this.openWorkspace(workspaceId)
-    }
+    if (profile) this.profilesService.openNewTabForProfile(profile as Any)
   }
 
   /** New workspace with one pane (profile of the first local shell); opened right away. */
@@ -183,6 +179,7 @@ export class LayoutService {
       menuOpen: false,
       timer: null,
       unseen: new Set(),
+      starting: true,
       leftAt: new Map(),
     }
     this.states.set(split, state)
@@ -204,6 +201,7 @@ export class LayoutService {
 
     this.mountSidebar(state)
     state.timer = setInterval(() => this.render(state), REFRESH_MS)
+    this.startAllPanes(state)
   }
 
   // ---------- views ----------
@@ -246,7 +244,49 @@ export class LayoutService {
 
   /** Re-fits "View all" to the current size; no-op when the grid stays the same. */
   private refreshGrid(state: WorkspaceTabState): void {
-    if (state.view.kind === 'all' && !state.busy) this.showAll(state)
+    if (state.view.kind === 'all' && !state.busy && !state.starting) this.showAll(state)
+  }
+
+  /**
+   * Every pane of a workspace runs, switched off or not: hiding is only visual.
+   * Tabby starts a terminal's shell only once the terminal has been on screen, so the
+   * workspace first shows all its panes (a fresh open already does; after a Tabby
+   * restart only the panes that were on screen come back), waits until every shell
+   * runs, then switches to "View all", which hides the switched-off ones again.
+   */
+  private async startAllPanes(state: WorkspaceTabState): Promise<void> {
+    const before = state.view
+    state.starting = true
+    try {
+      const workspace = this.workspaces.getWorkspace(state.workspaceId)
+      if (!workspace) return
+      const area = await this.waitFor(() => this.paneArea(state), 3000)
+      const missing = workspace.panes.some((p) => !this.livePanes(state).has(p.id))
+      const tree = this.workspaces.allPanesLayout(workspace, area?.width, area?.height)
+      if (missing && tree) {
+        await this.apply(state, workspace, tree)
+      }
+      await this.waitFor(() => {
+        const tabs = [...this.livePanes(state).values()]
+        return tabs.length && tabs.every((t) => (t as Any).session) ? true : null
+      }, START_TIMEOUT_MS)
+    } finally {
+      state.starting = false
+    }
+    // Back to the view from before (a fresh tab starts in "View all")
+    if (before.kind === 'focus') await this.showFocus(state, before.paneId)
+    else await this.showAll(state, true)
+  }
+
+  /** Polls until `check` returns a value (not null/false) or the timeout passes. */
+  private async waitFor<T>(check: () => T | null | false, timeoutMs: number): Promise<T | null> {
+    const end = Date.now() + timeoutMs
+    for (;;) {
+      const value = check()
+      if (value) return value
+      if (Date.now() > end) return null
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
   }
 
   private refreshAllGrids(): void {
@@ -437,6 +477,8 @@ export class LayoutService {
     await this.workspaces.saveWorkspaceQuietly(workspace)
     state.editingPaneId = null
     this.render(state, true)
+    // Every pane runs: a new pane starts as soon as it is saved
+    if (!this.livePanes(state).has(paneId)) await this.startAllPanes(state)
   }
 
   /**
@@ -718,7 +760,7 @@ export class LayoutService {
     if (state.editingPaneId === pane.id) classes.push('editing')
     const row = this.node('div', classes.join(' '))
     row.title = [
-      onScreen ? 'On screen' : tab ? 'Running, not on screen' : 'Not started yet',
+      onScreen ? 'On screen' : tab ? 'Running, not on screen' : 'Not running (shown again by View all or its title)',
       pane.hidden ? 'switched off (not in "View all")' : noRoom ? 'switched on, but no room at the minimum pane size' : '',
     ].filter(Boolean).join(' · ')
 
