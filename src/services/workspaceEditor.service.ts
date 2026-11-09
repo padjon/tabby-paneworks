@@ -3,8 +3,8 @@ import { ConfigService, NotificationsService, ProfilesService } from 'tabby-core
 import {
   Workspace,
   WorkspacePane,
-  WorkspaceSplit,
-  isWorkspaceSplit,
+  LayoutSplit,
+  isLayoutSplit,
   generateUUID,
   deepClone,
   TabbyProfile,
@@ -12,7 +12,18 @@ import {
   TabbySplitLayoutProfile,
   makePaneMarker,
   formatPaneLabel,
+  normalizeWorkspace,
+  planGrid,
+  gridTree,
+  layoutPaneIds,
+  DEFAULT_MIN_PANE_WIDTH,
+  DEFAULT_MIN_PANE_HEIGHT,
 } from '../models/workspace.model'
+
+/** Width of the Paneworks sidebar in a workspace tab (px). */
+export const SIDEBAR_WIDTH = 210
+/** Tab bar and window chrome, used to estimate the pane area before the tab exists (px). */
+const CHROME_HEIGHT = 80
 import { CONFIG_KEY, DISPLAY_NAME } from '../build-config'
 import { PendingCommand } from './paneRuntime.service'
 
@@ -37,9 +48,53 @@ export class WorkspaceEditorService {
     return this.cachedProfiles
   }
 
-  /** Returns all saved workspaces from config. */
+  /** Returns all saved workspaces from config (old tree-shaped ones converted to a pane list). */
   getWorkspaces(): Workspace[] {
-    return this.config.store?.[CONFIG_KEY]?.workspaces ?? []
+    const workspaces: Workspace[] = this.config.store?.[CONFIG_KEY]?.workspaces ?? []
+    for (const workspace of workspaces) {
+      if (!Array.isArray(workspace.panes)) normalizeWorkspace(workspace)
+    }
+    return workspaces
+  }
+
+  /**
+   * Saves one workspace's changed fields (pane order, switches) without a notification.
+   * Used by the sidebar.
+   */
+  async saveWorkspaceQuietly(workspace: Workspace): Promise<void> {
+    const workspaces = this.getWorkspaces()
+    const index = workspaces.findIndex((w) => w.id === workspace.id)
+    if (index === -1) return
+    workspaces[index] = workspace
+    await this.saveWorkspaces(workspaces)
+  }
+
+  /** Minimum pane size of a workspace, with defaults. */
+  minPaneSize(workspace: Workspace): { width: number, height: number } {
+    return {
+      width: workspace.minPaneWidth || DEFAULT_MIN_PANE_WIDTH,
+      height: workspace.minPaneHeight || DEFAULT_MIN_PANE_HEIGHT,
+    }
+  }
+
+  /**
+   * "View all" grid of a workspace for a pane area: the switched-on panes in order,
+   * as many as fit. Returns the tree and the ids of the panes that fit.
+   */
+  planViewAll(workspace: Workspace, width: number, height: number): { tree: LayoutSplit | null, shown: string[] } {
+    const visible = workspace.panes.filter((p) => !p.hidden).map((p) => p.id)
+    const min = this.minPaneSize(workspace)
+    const rows = planGrid(visible.length, width, height, min.width, min.height)
+    const count = rows.reduce((a, b) => a + b, 0)
+    const shown = visible.slice(0, count)
+    return { tree: shown.length ? gridTree(shown, rows) : null, shown }
+  }
+
+  /** The grid a workspace opens with, estimated from the window size. */
+  private initialLayout(workspace: Workspace): LayoutSplit | null {
+    const width = Math.max(1, window.innerWidth - SIDEBAR_WIDTH)
+    const height = Math.max(1, window.innerHeight - CHROME_HEIGHT)
+    return this.planViewAll(workspace, width, height).tree
   }
 
   /**
@@ -123,51 +178,16 @@ export class WorkspaceEditorService {
       this.config.save()
       console.log(`[${DISPLAY_NAME}] Cleaned up ${profiles.length - filtered.length} orphaned profiles`)
     }
-
-    // Repair any workspaces with corrupted ratios (from pre-0.2.3 bug where
-    // Tabby's normalize() mutated config ratios via shared array reference)
-    this.repairCorruptedRatios()
   }
 
-  /** Repairs workspaces where ratios array length doesn't match children count. */
-  private repairCorruptedRatios(): void {
-    const workspaces = this.getWorkspaces()
-    let repaired = false
-
-    for (const workspace of workspaces) {
-      if (this.repairSplitRatios(workspace.root)) {
-        repaired = true
-        console.log(`[${DISPLAY_NAME}] Repaired corrupted ratios in workspace "${workspace.name}"`)
-      }
-    }
-
-    if (repaired) {
-      this.config.save()
-    }
-  }
-
-  private repairSplitRatios(split: WorkspaceSplit): boolean {
-    let changed = false
-
-    // Recursively repair children first
-    for (const child of split.children) {
-      if (isWorkspaceSplit(child) && this.repairSplitRatios(child)) {
-        changed = true
-      }
-    }
-
-    // Fix ratios/children count mismatch
-    if (split.ratios.length !== split.children.length) {
-      split.ratios = split.children.map(() => 1 / split.children.length)
-      changed = true
-    }
-
-    return changed
-  }
-
-  /** Generates a Tabby split-layout profile from a workspace for opening. */
-  async generateTabbyProfile(workspace: Workspace): Promise<TabbySplitLayoutProfile> {
+  /**
+   * Generates a Tabby split-layout profile from a workspace for opening:
+   * the "View all" grid of its switched-on panes; the others start when shown.
+   */
+  async generateTabbyProfile(workspace: Workspace): Promise<TabbySplitLayoutProfile | null> {
     await this.getCachedProfiles()
+    const tree = this.initialLayout(workspace)
+    if (!tree) return null
     const safeName = this.sanitizeForProfileId(workspace.name)
     return {
       id: `split-layout:${CONFIG_KEY}:${safeName}:${workspace.id}`,
@@ -178,7 +198,7 @@ export class WorkspaceEditorService {
       color: workspace.color,
       isBuiltin: false,
       options: {
-        recoveryToken: this.generateRecoveryToken(workspace.root, workspace.name, workspace.id),
+        recoveryToken: this.generateRecoveryToken(tree, workspace),
       },
     }
   }
@@ -189,20 +209,21 @@ export class WorkspaceEditorService {
     return this.generatePaneToken(pane, workspace.name, workspace.id)
   }
 
-  private generateRecoveryToken(split: WorkspaceSplit, workspaceName: string, workspaceId: string): TabbyRecoveryToken {
+  private generateRecoveryToken(split: LayoutSplit, workspace: Workspace): TabbyRecoveryToken {
     return {
       type: 'app:split-tab',
       orientation: split.orientation === 'horizontal' ? 'h' : 'v',
       ratios: [...split.ratios],
-      paneworksWorkspaceId: workspaceId,
+      paneworksWorkspaceId: workspace.id,
       // The outer tab always shows the workspace name, never the pane titles
-      tabTitle: workspaceName,
+      tabTitle: workspace.name,
       disableDynamicTitle: true,
       children: split.children.map((child) => {
-        if (isWorkspaceSplit(child)) {
-          return this.generateRecoveryToken(child, workspaceName, workspaceId)
+        if (isLayoutSplit(child)) {
+          return this.generateRecoveryToken(child, workspace)
         }
-        return this.generatePaneToken(child, workspaceName, workspaceId)
+        const pane = workspace.panes.find((p) => p.id === child.paneId)!
+        return this.generatePaneToken(pane, workspace.name, workspace.id)
       }),
     }
   }
@@ -307,18 +328,10 @@ export class WorkspaceEditorService {
     clone.id = generateUUID()
     clone.name = `${workspace.name} (Copy)`
     clone.launchOnStartup = false
-    this.regenerateIds(clone.root)
-    return clone
-  }
-
-  private regenerateIds(node: WorkspacePane | WorkspaceSplit): void {
-    if (isWorkspaceSplit(node)) {
-      for (const child of node.children) {
-        this.regenerateIds(child)
-      }
-    } else {
-      node.id = generateUUID()
+    for (const pane of clone.panes) {
+      pane.id = generateUUID()
     }
+    return clone
   }
 
   private sanitizeForProfileId(name: string): string {
@@ -356,28 +369,13 @@ export class WorkspaceEditorService {
     return this.cachedProfiles?.find((p) => p.id === profileId)
   }
 
-  /** Collects all startup commands from panes in a workspace. */
+  /** Startup commands of the panes a workspace opens with. */
   collectStartupCommands(workspace: Workspace): PendingCommand[] {
-    const commands: PendingCommand[] = []
-    this.collectCommandsFromNode(workspace.root, workspace.name, commands)
-    return commands
-  }
-
-  private collectCommandsFromNode(
-    node: WorkspacePane | WorkspaceSplit,
-    workspaceName: string,
-    commands: PendingCommand[]
-  ): void {
-    if (isWorkspaceSplit(node)) {
-      for (const child of node.children) {
-        this.collectCommandsFromNode(child, workspaceName, commands)
-      }
-    } else if (node.startupCommand) {
-      commands.push({
-        paneId: node.id,
-        command: node.startupCommand,
-      })
-    }
+    const tree = this.initialLayout(workspace)
+    const opened = new Set(tree ? layoutPaneIds(tree) : [])
+    return workspace.panes
+      .filter((p) => opened.has(p.id) && p.startupCommand)
+      .map((p) => ({ paneId: p.id, command: p.startupCommand }))
   }
 
   /** Returns the workspace with the given id, if it still exists. */

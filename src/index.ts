@@ -14,8 +14,6 @@ import { WorkspaceBackgroundService } from './services/workspaceBackground.servi
 
 import { WorkspaceListComponent } from './components/workspaceList.component'
 import { WorkspaceEditorComponent } from './components/workspaceEditor.component'
-import { PaneEditorComponent } from './components/paneEditor.component'
-import { SplitPreviewComponent } from './components/splitPreview.component'
 import { DeleteConfirmModalComponent } from './components/deleteConfirmModal.component'
 
 @NgModule({
@@ -32,8 +30,6 @@ import { DeleteConfirmModalComponent } from './components/deleteConfirmModal.com
   declarations: [
     WorkspaceListComponent,
     WorkspaceEditorComponent,
-    PaneEditorComponent,
-    SplitPreviewComponent,
     DeleteConfirmModalComponent,
   ],
 })

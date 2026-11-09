@@ -62,12 +62,8 @@ export interface WorkspacePane {
   profileId: string
   cwd?: string
   startupCommand?: string
-}
-
-export interface WorkspaceSplit {
-  orientation: 'horizontal' | 'vertical'
-  ratios: number[]
-  children: (WorkspacePane | WorkspaceSplit)[]
+  /** Switched off in the sidebar: not part of "View all" (still reachable by focus view). */
+  hidden?: boolean
 }
 
 export interface WorkspaceBackground {
@@ -75,7 +71,24 @@ export interface WorkspaceBackground {
   value: string  // CSS value: hex, gradient string, or URL
 }
 
-/** A pane placed in a layout, referenced by its id (panes are defined in `root` or `extraPanes`). */
+export interface Workspace {
+  id: string
+  name: string
+  icon?: string
+  color?: string
+  background?: WorkspaceBackground
+  /** All panes, in sidebar and grid order. */
+  panes: WorkspacePane[]
+  /** Smallest pane size in px; decides how many panes fit and in how many rows. */
+  minPaneWidth?: number
+  minPaneHeight?: number
+  launchOnStartup?: boolean
+}
+
+export const DEFAULT_MIN_PANE_WIDTH = 600
+export const DEFAULT_MIN_PANE_HEIGHT = 260
+
+/** Tree used internally to build Tabby's split layout. */
 export interface LayoutPaneRef {
   paneId: string
 }
@@ -86,63 +99,79 @@ export interface LayoutSplit {
   children: (LayoutPaneRef | LayoutSplit)[]
 }
 
-/** A further arrangement of the workspace's panes, selectable in the sidebar. */
-export interface WorkspaceLayout {
-  id: string
-  name: string
-  root: LayoutSplit
-}
-
-export interface Workspace {
-  id: string
-  name: string
-  icon?: string
-  color?: string
-  background?: WorkspaceBackground
-  /** The main layout; it also defines its panes. Opened when the workspace opens. */
-  root: WorkspaceSplit
-  /** Sidebar name of the main layout (default "Main"). */
-  mainLayoutName?: string
-  /** Panes that are not in the main layout; started the first time a layout or focus view shows them. */
-  extraPanes?: WorkspacePane[]
-  /** Further layouts over the same panes. */
-  layouts?: WorkspaceLayout[]
-  launchOnStartup?: boolean
-}
-
-export const MAIN_LAYOUT_ID = 'main'
-
-/** All panes of a workspace: main layout first, then extra panes. */
-export function allPanes(workspace: Workspace): WorkspacePane[] {
-  const panes: WorkspacePane[] = []
-  const walk = (node: WorkspacePane | WorkspaceSplit) => {
-    if (isWorkspaceSplit(node)) node.children.forEach(walk)
-    else panes.push(node)
-  }
-  walk(workspace.root)
-  return [...panes, ...(workspace.extraPanes ?? [])]
-}
-
-/** All layouts of a workspace, the main layout (from `root`) first. */
-export function allLayouts(workspace: Workspace): WorkspaceLayout[] {
-  const toRefs = (split: WorkspaceSplit): LayoutSplit => ({
-    orientation: split.orientation,
-    ratios: [...split.ratios],
-    children: split.children.map((c) => isWorkspaceSplit(c) ? toRefs(c) : { paneId: c.id }),
-  })
-  return [
-    { id: MAIN_LAYOUT_ID, name: workspace.mainLayoutName || 'Main', root: toRefs(workspace.root) },
-    ...(workspace.layouts ?? []),
-  ]
-}
-
 export function isLayoutSplit(node: LayoutPaneRef | LayoutSplit): node is LayoutSplit {
   return 'children' in node
 }
 
-/** Pane ids of a layout in reading order. */
+/** Pane ids of a layout tree in reading order. */
 export function layoutPaneIds(split: LayoutSplit): string[] {
   return split.children.flatMap((c) => isLayoutSplit(c) ? layoutPaneIds(c) : [c.paneId])
+}
+
+/**
+ * Grid plan: how many panes go in each row.
+ * Fits as many of `count` panes as the minimum size allows in width x height,
+ * and among the arrangements that fit picks the one with the largest panes
+ * (relative to the minimum size); rows are filled evenly, fuller rows first.
+ * Examples (min 600x260, area 1900x1000, capacity 3x3): 3 panes -> [2, 1];
+ * 4 -> [2, 2]; 5 -> [2, 2, 1]; 8 -> [3, 3, 2]. In 1200x700 (capacity 2x2)
+ * 8 panes -> [2, 2]: only the first 4 are shown.
+ */
+export function planGrid(count: number, width: number, height: number, minWidth: number, minHeight: number): number[] {
+  if (count <= 0) return []
+  const maxCols = Math.max(1, Math.floor(width / Math.max(1, minWidth)))
+  const maxRows = Math.max(1, Math.floor(height / Math.max(1, minHeight)))
+  const shown = Math.min(count, maxCols * maxRows)
+  let best: { rows: number, score: number } | null = null
+  for (let rows = 1; rows <= Math.min(shown, maxRows); rows++) {
+    const perRow = Math.ceil(shown / rows)
+    if (perRow > maxCols) continue
+    const score = Math.min(width / perRow / minWidth, height / rows / minHeight)
+    if (!best || score > best.score + 1e-9) best = { rows, score }
+  }
+  const rows = best?.rows ?? 1
+  const base = Math.floor(shown / rows)
+  const extra = shown % rows
+  return Array.from({ length: rows }, (_, i) => base + (i < extra ? 1 : 0))
+}
+
+/** Layout tree for panes arranged by a grid plan (rows stacked, panes side by side). */
+export function gridTree(paneIds: string[], rows: number[]): LayoutSplit {
+  let offset = 0
+  const rowNodes = rows.map((n): LayoutPaneRef | LayoutSplit => {
+    const ids = paneIds.slice(offset, offset + n)
+    offset += n
+    return ids.length === 1
+      ? { paneId: ids[0] }
+      : { orientation: 'horizontal', ratios: ids.map(() => 1 / ids.length), children: ids.map((paneId) => ({ paneId })) }
+  })
+  if (rowNodes.length === 1 && isLayoutSplit(rowNodes[0])) return rowNodes[0]
+  return { orientation: 'vertical', ratios: rowNodes.map(() => 1 / rowNodes.length), children: rowNodes }
+}
+
+/**
+ * Brings a stored workspace to the current shape: workspaces saved with a pane tree
+ * (`root`, TabbySpaces style) get their panes as a flat list in reading order.
+ */
+export function normalizeWorkspace(workspace: Workspace): Workspace {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const legacy = workspace as any
+  if (!Array.isArray(workspace.panes)) {
+    const panes: WorkspacePane[] = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const walk = (node: any) => {
+      if (!node) return
+      if (Array.isArray(node.children)) node.children.forEach(walk)
+      else if (node.id) panes.push(node)
+    }
+    walk(legacy.root)
+    workspace.panes = [...panes, ...(legacy.extraPanes ?? [])]
+  }
+  delete legacy.root
+  delete legacy.extraPanes
+  delete legacy.layouts
+  delete legacy.mainLayoutName
+  return workspace
 }
 
 // Preset backgrounds for quick selection
@@ -200,25 +229,9 @@ export function formatPaneLabel(paneName: string | undefined, programTitle: stri
   return `${name} · ${title}`
 }
 
-/** Finds a pane by id anywhere in a split tree. */
-export function findPane(node: WorkspacePane | WorkspaceSplit, paneId: string): WorkspacePane | undefined {
-  if (isWorkspaceSplit(node)) {
-    for (const child of node.children) {
-      const found = findPane(child, paneId)
-      if (found) return found
-    }
-    return undefined
-  }
-  return node.id === paneId ? node : undefined
-}
-
-/**
- * Type guard to check if a node is a WorkspaceSplit.
- * @param node - The node to check
- * @returns True if the node is a WorkspaceSplit
- */
-export function isWorkspaceSplit(node: WorkspacePane | WorkspaceSplit): node is WorkspaceSplit {
-  return 'orientation' in node && 'children' in node
+/** Finds a pane of a workspace by id. */
+export function findPane(workspace: Workspace, paneId: string): WorkspacePane | undefined {
+  return workspace.panes.find((p) => p.id === paneId)
 }
 
 /**
@@ -231,19 +244,6 @@ export function createDefaultPane(): WorkspacePane {
     profileId: '',
     cwd: '',
     startupCommand: '',
-  }
-}
-
-/**
- * Creates a new split with two default panes.
- * @param orientation - Split direction ('horizontal' or 'vertical'), defaults to 'horizontal'
- * @returns A new WorkspaceSplit with two panes at 50/50 ratio
- */
-export function createDefaultSplit(orientation: 'horizontal' | 'vertical' = 'horizontal'): WorkspaceSplit {
-  return {
-    orientation,
-    ratios: [0.5, 0.5],
-    children: [createDefaultPane(), createDefaultPane()],
   }
 }
 
@@ -279,7 +279,7 @@ export function getRandomIcon(): string {
 /**
  * Creates a new workspace with default configuration.
  * @param name - Display name for the workspace (optional)
- * @returns A new Workspace with generated UUID, random icon/color, and a default split
+ * @returns A new Workspace with generated UUID, random icon/color and two panes
  */
 export function createDefaultWorkspace(name: string = ''): Workspace {
   return {
@@ -287,7 +287,7 @@ export function createDefaultWorkspace(name: string = ''): Workspace {
     name,
     icon: getRandomIcon(),
     color: getRandomColor(),
-    root: createDefaultSplit(),
+    panes: [createDefaultPane(), createDefaultPane()],
     launchOnStartup: false,
   }
 }
@@ -299,18 +299,6 @@ export function generateUUID(): string {
     const v = c === 'x' ? r : (r & 0x3) | 0x8
     return v.toString(16)
   })
-}
-
-/**
- * Recursively counts the total number of panes in a split tree.
- * @param node - The root node to count from
- * @returns Total number of panes in the tree
- */
-export function countPanes(node: WorkspacePane | WorkspaceSplit): number {
-  if (isWorkspaceSplit(node)) {
-    return node.children.reduce((sum, child) => sum + countPanes(child), 0)
-  }
-  return 1
 }
 
 /**

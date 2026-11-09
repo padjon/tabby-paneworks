@@ -340,3 +340,60 @@
     margin-left: $spacing-xs;
   }
 }
+
+// Panes section (flat pane list)
+.pane-grid-settings {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+
+  label { margin: 0 6px 0 0; }
+  .size-input { width: 90px; }
+  .size-x, .size-unit { opacity: .7; }
+  small { flex-basis: 100%; }
+}
+
+.pane-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  .pane-list-head, .pane-item {
+    display: grid;
+    grid-template-columns: 34px minmax(80px, 1fr) minmax(120px, 1.2fr) minmax(140px, 1.6fr) minmax(120px, 1.4fr) 96px;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .pane-list-head {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    opacity: .55;
+    padding: 0 2px;
+  }
+
+  .pane-item.off .col-name, .pane-item.off .col-profile, .pane-item.off .col-cwd, .pane-item.off .col-command {
+    opacity: .5;
+  }
+
+  .col-shown { text-align: center; }
+  .col-actions { display: flex; gap: 2px; justify-content: flex-end; }
+
+  .icon-btn {
+    background: none;
+    border: none;
+    color: inherit;
+    opacity: .65;
+    padding: 4px 6px;
+    cursor: pointer;
+
+    &:hover:not(:disabled) { opacity: 1; }
+    &:disabled { opacity: .2; cursor: default; }
+    &.danger:hover:not(:disabled) { color: #ef4444; }
+  }
+
+  .add-pane { align-self: flex-start; margin-top: 6px; }
+}

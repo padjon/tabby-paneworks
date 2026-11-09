@@ -2,21 +2,13 @@ import { Component, Input, Output, EventEmitter, OnInit, OnChanges, AfterViewIni
 import {
   Workspace,
   WorkspacePane,
-  WorkspaceSplit,
   WorkspaceBackground,
   TabbyProfile,
-  isWorkspaceSplit,
   createDefaultPane,
-  generateUUID,
   BACKGROUND_PRESETS,
+  DEFAULT_MIN_PANE_WIDTH,
+  DEFAULT_MIN_PANE_HEIGHT,
 } from '../models/workspace.model'
-
-interface TreeContext {
-  node: WorkspaceSplit
-  index: number
-  parent: WorkspaceSplit | null
-  child: WorkspacePane | WorkspaceSplit
-}
 import { WorkspaceEditorService } from '../services/workspaceEditor.service'
 
 @Component({
@@ -33,10 +25,6 @@ export class WorkspaceEditorComponent implements OnInit, OnChanges, AfterViewIni
 
   @ViewChild('nameInput') nameInput!: ElementRef<HTMLInputElement>
 
-  selectedPaneId: string | null = null
-  wasResizing = false
-  editingPane: WorkspacePane | null = null
-  showPaneEditor = false
   profiles: TabbyProfile[] = []
   availableIcons = [
     'columns', 'terminal', 'code', 'folder', 'home', 'briefcase',
@@ -47,6 +35,8 @@ export class WorkspaceEditorComponent implements OnInit, OnChanges, AfterViewIni
   backgroundPresets = BACKGROUND_PRESETS
   backgroundDropdownOpen = false
   customBackgroundValue = ''
+  readonly defaultMinWidth = DEFAULT_MIN_PANE_WIDTH
+  readonly defaultMinHeight = DEFAULT_MIN_PANE_HEIGHT
 
   constructor(
     private workspaceService: WorkspaceEditorService,
@@ -56,21 +46,13 @@ export class WorkspaceEditorComponent implements OnInit, OnChanges, AfterViewIni
 
   @HostListener('document:click', ['$event'])
   onDocumentClick(event: MouseEvent): void {
-    // Check if click is outside the icon dropdown area (trigger + dropdown)
-    const dropdownTrigger = this.elementRef.nativeElement.querySelector('.dropdown-trigger')
-    const iconDropdown = this.elementRef.nativeElement.querySelector('.icon-dropdown')
-    const iconClickedInside = dropdownTrigger?.contains(event.target as Node) ||
-                          iconDropdown?.contains(event.target as Node)
-    if (this.iconDropdownOpen && !iconClickedInside) {
+    const target = event.target as Node
+    const root = this.elementRef.nativeElement as HTMLElement
+    const inside = (selector: string) => root.querySelector(selector)?.contains(target)
+    if (this.iconDropdownOpen && !inside('.dropdown-trigger') && !inside('.icon-dropdown')) {
       this.iconDropdownOpen = false
     }
-
-    // Check if click is outside the background dropdown area
-    const bgTrigger = this.elementRef.nativeElement.querySelector('.background-trigger')
-    const bgDropdown = this.elementRef.nativeElement.querySelector('.background-dropdown')
-    const bgClickedInside = bgTrigger?.contains(event.target as Node) ||
-                            bgDropdown?.contains(event.target as Node)
-    if (this.backgroundDropdownOpen && !bgClickedInside) {
+    if (this.backgroundDropdownOpen && !inside('.background-trigger') && !inside('.background-dropdown')) {
       this.backgroundDropdownOpen = false
     }
   }
@@ -101,19 +83,7 @@ export class WorkspaceEditorComponent implements OnInit, OnChanges, AfterViewIni
 
   applyCustomBackground(): void {
     const value = this.customBackgroundValue.trim()
-    if (value) {
-      this.workspace.background = {
-        type: 'gradient',
-        value
-      }
-    } else {
-      this.workspace.background = undefined
-    }
-  }
-
-  clearBackground(): void {
-    this.workspace.background = undefined
-    this.customBackgroundValue = ''
+    this.workspace.background = value ? { type: 'gradient', value } : undefined
   }
 
   isBackgroundSelected(preset: WorkspaceBackground): boolean {
@@ -138,53 +108,85 @@ export class WorkspaceEditorComponent implements OnInit, OnChanges, AfterViewIni
   private focusNameInput(): void {
     requestAnimationFrame(() => {
       setTimeout(() => {
-        if (this.nameInput?.nativeElement) {
-          this.nameInput.nativeElement.focus()
-          this.nameInput.nativeElement.select()
-        }
+        this.nameInput?.nativeElement?.focus()
+        this.nameInput?.nativeElement?.select()
       }, 0)
     })
   }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['workspace'] && !changes['workspace'].firstChange) {
-      const prevId = changes['workspace'].previousValue?.id
-      const currId = this.workspace.id
-
-      if (prevId !== currId) {
-        // Different workspace - reset everything and focus name input
-        this.selectedPaneId = null
-        this.editingPane = null
-        this.showPaneEditor = false
+      if (changes['workspace'].previousValue?.id !== this.workspace.id) {
         this.focusNameInput()
-      } else {
-        // Same workspace ID but different reference (after save/reload)
-        // Re-sync editingPane to point to pane in new object tree
-        if (this.selectedPaneId && this.showPaneEditor) {
-          this.editingPane = this.findPaneById(this.selectedPaneId)
-        }
       }
-      // Always reset dropdowns and sync background value
       this.iconDropdownOpen = false
       this.backgroundDropdownOpen = false
       this.customBackgroundValue = this.workspace.background?.value || ''
       this.initializeWorkspace()
     }
-
-    // Handle autoFocus change
     if (changes['autoFocus']?.currentValue) {
       this.focusNameInput()
     }
   }
 
   private initializeWorkspace(): void {
-    if (!this.workspace.root) {
-      this.workspace.root = {
-        orientation: 'horizontal',
-        ratios: [0.5, 0.5],
-        children: [createDefaultPane(), createDefaultPane()],
-      }
+    if (!Array.isArray(this.workspace.panes)) {
+      this.workspace.panes = []
     }
+    if (!this.workspace.panes.length) {
+      this.addPane()
+    }
+  }
+
+  // ---------- panes ----------
+
+  get localProfiles(): TabbyProfile[] {
+    return this.profiles.filter((p) => p.type === 'local' || p.type?.startsWith('local:'))
+  }
+
+  get sshProfiles(): TabbyProfile[] {
+    return this.profiles.filter((p) => p.type === 'ssh')
+  }
+
+  get otherProfiles(): TabbyProfile[] {
+    return this.profiles.filter((p) => p.type !== 'local' && !p.type?.startsWith('local:') && p.type !== 'ssh')
+  }
+
+  addPane(): void {
+    const pane = createDefaultPane()
+    const last = this.workspace.panes[this.workspace.panes.length - 1]
+    pane.profileId = last?.profileId || this.localProfiles[0]?.id || this.profiles[0]?.id || ''
+    pane.cwd = last?.cwd || ''
+    this.workspace.panes.push(pane)
+  }
+
+  removePane(index: number): void {
+    if (this.workspace.panes.length > 1) {
+      this.workspace.panes.splice(index, 1)
+    }
+  }
+
+  movePane(index: number, delta: number): void {
+    const target = index + delta
+    if (target < 0 || target >= this.workspace.panes.length) return
+    const [pane] = this.workspace.panes.splice(index, 1)
+    this.workspace.panes.splice(target, 0, pane)
+  }
+
+  toggleShown(pane: WorkspacePane): void {
+    if (pane.hidden) delete pane.hidden
+    else pane.hidden = true
+  }
+
+  /** Empty input = default; stored only when set. */
+  setMinSize(key: 'minPaneWidth' | 'minPaneHeight', value: string | number | null): void {
+    const n = Math.round(Number(value))
+    if (n > 0) this.workspace[key] = n
+    else delete this.workspace[key]
+  }
+
+  trackByPane(_index: number, pane: WorkspacePane): string {
+    return pane.id
   }
 
   onSave(): void {
@@ -197,272 +199,4 @@ export class WorkspaceEditorComponent implements OnInit, OnChanges, AfterViewIni
   onCancel(): void {
     this.cancel.emit()
   }
-
-  deselectPane(): void {
-    this.selectedPaneId = null
-  }
-
-  onPreviewBackgroundClick(): void {
-    if (this.wasResizing) return
-    this.deselectPane()
-    this.closePaneEditor()
-  }
-
-  onResizeEnd(): void {
-    this.wasResizing = true
-    setTimeout(() => { this.wasResizing = false }, 0)
-  }
-
-  editPane(pane: WorkspacePane): void {
-    if (this.wasResizing) return
-    if (this.selectedPaneId === pane.id) {
-      // Toggle editor visibility while keeping selection
-      if (this.showPaneEditor) {
-        this.closePaneEditor()
-      } else {
-        this.editingPane = pane
-        this.showPaneEditor = true
-      }
-      this.cdr.detectChanges()
-      return
-    }
-    this.selectedPaneId = pane.id
-    this.editingPane = pane
-    this.showPaneEditor = true
-    this.cdr.detectChanges()
-  }
-
-  closePaneEditor(): void {
-    this.showPaneEditor = false
-    this.editingPane = null
-    this.cdr.detectChanges()
-  }
-
-  // Helper functions
-  private findPaneById(id: string): WorkspacePane | null {
-    return this.findPaneInNode(this.workspace.root, id)
-  }
-
-  private findPaneInNode(node: WorkspaceSplit, id: string): WorkspacePane | null {
-    for (const child of node.children) {
-      if (isWorkspaceSplit(child)) {
-        const found = this.findPaneInNode(child, id)
-        if (found) return found
-      } else if (child.id === id) {
-        return child
-      }
-    }
-    return null
-  }
-
-  canRemovePane(): boolean {
-    return this.countPanes(this.workspace.root) > 1
-  }
-
-  private countPanes(node: WorkspaceSplit): number {
-    return node.children.reduce((count, child) => {
-      return count + (isWorkspaceSplit(child) ? this.countPanes(child) : 1)
-    }, 0)
-  }
-
-  private walkTree(
-    node: WorkspaceSplit,
-    visitor: (ctx: TreeContext) => boolean,
-    parent: WorkspaceSplit | null = null
-  ): boolean {
-    for (let i = 0; i < node.children.length; i++) {
-      const child = node.children[i]
-      const ctx: TreeContext = { node, index: i, parent, child }
-
-      if (isWorkspaceSplit(child)) {
-        if (this.walkTree(child, visitor, node)) return true
-      } else if (visitor(ctx)) {
-        return true
-      }
-    }
-    return false
-  }
-
-  private updatePaneInTree(updatedPane: WorkspacePane): boolean {
-    return this.walkTree(this.workspace.root, (ctx) => {
-      if ((ctx.child as WorkspacePane).id === updatedPane.id) {
-        ctx.node.children[ctx.index] = updatedPane
-        return true
-      }
-      return false
-    })
-  }
-
-  splitPane(pane: WorkspacePane, orientation: 'horizontal' | 'vertical'): void {
-    this.splitPaneInTree(pane, orientation)
-    this.cdr.detectChanges()
-  }
-
-  splitSelectedPane(orientation: 'horizontal' | 'vertical'): void {
-    if (!this.selectedPaneId) return
-    const pane = this.findPaneById(this.selectedPaneId)
-    if (pane) this.splitPane(pane, orientation)
-  }
-
-  private splitPaneInTree(
-    targetPane: WorkspacePane,
-    orientation: 'horizontal' | 'vertical'
-  ): boolean {
-    return this.walkTree(this.workspace.root, (ctx) => {
-      if ((ctx.child as WorkspacePane).id === targetPane.id) {
-        const newPane = createDefaultPane()
-        newPane.profileId = (ctx.child as WorkspacePane).profileId
-        const newSplit: WorkspaceSplit = {
-          orientation,
-          ratios: [0.5, 0.5],
-          children: [ctx.child, newPane],
-        }
-        ctx.node.children[ctx.index] = newSplit
-        return true
-      }
-      return false
-    })
-  }
-
-  removePane(pane: WorkspacePane): void {
-    if (this.selectedPaneId === pane.id) {
-      this.selectedPaneId = null
-    }
-    this.removePaneFromTree(this.workspace.root, pane)
-    this.cdr.detectChanges()
-  }
-
-  removeSelectedPane(): void {
-    if (!this.selectedPaneId || !this.canRemovePane()) return
-    const pane = this.findPaneById(this.selectedPaneId)
-    if (pane) this.removePane(pane)
-  }
-
-  private removePaneFromTree(node: WorkspaceSplit, targetPane: WorkspacePane): boolean {
-    for (let i = 0; i < node.children.length; i++) {
-      const child = node.children[i]
-      if (isWorkspaceSplit(child)) {
-        // Check if the pane is directly in this split
-        const paneIndex = child.children.findIndex(
-          (c) => !isWorkspaceSplit(c) && (c as WorkspacePane).id === targetPane.id
-        )
-        if (paneIndex !== -1 && child.children.length > 1) {
-          child.children.splice(paneIndex, 1)
-          this.recalculateRatios(child)
-          // If only one child remains, flatten
-          if (child.children.length === 1) {
-            node.children[i] = child.children[0]
-          }
-          return true
-        }
-        if (this.removePaneFromTree(child, targetPane)) {
-          return true
-        }
-      } else if (child.id === targetPane.id) {
-        if (node.children.length > 1) {
-          node.children.splice(i, 1)
-          this.recalculateRatios(node)
-          return true
-        }
-      }
-    }
-    return false
-  }
-
-  private recalculateRatios(split: WorkspaceSplit): void {
-    const count = split.children.length
-    split.ratios = split.children.map(() => 1 / count)
-  }
-
-  setOrientation(orientation: 'horizontal' | 'vertical'): void {
-    this.workspace.root.orientation = orientation
-    this.cdr.detectChanges()
-  }
-
-  updateRatio(index: number, value: number): void {
-    const ratios = [...this.workspace.root.ratios]
-    const diff = value - ratios[index]
-
-    if (index < ratios.length - 1) {
-      ratios[index] = value
-      ratios[index + 1] -= diff
-    } else {
-      ratios[index] = value
-      ratios[index - 1] -= diff
-    }
-
-    // Clamp values
-    ratios.forEach((r, i) => {
-      ratios[i] = Math.max(0.1, Math.min(0.9, r))
-    })
-
-    this.workspace.root.ratios = ratios
-    this.cdr.detectChanges()
-  }
-
-  onRatioChange(): void {
-    this.cdr.detectChanges()
-  }
-
-  // Add pane operations
-  addPane(direction: 'left' | 'right' | 'top' | 'bottom'): void {
-    if (!this.selectedPaneId) return
-    const pane = this.findPaneById(this.selectedPaneId)
-    if (!pane) return
-    this.addPaneInTree(pane, direction)
-    this.cdr.detectChanges()
-  }
-
-  addPaneFromEvent(pane: WorkspacePane, direction: 'left' | 'right' | 'top' | 'bottom'): void {
-    this.addPaneInTree(pane, direction)
-    this.cdr.detectChanges()
-  }
-
-  private addPaneInTree(
-    targetPane: WorkspacePane,
-    direction: 'left' | 'right' | 'top' | 'bottom'
-  ): boolean {
-    const isHorizontalAdd = direction === 'left' || direction === 'right'
-    const isBefore = direction === 'left' || direction === 'top'
-    const targetOrientation = isHorizontalAdd ? 'horizontal' : 'vertical'
-
-    return this.walkTree(this.workspace.root, (ctx) => {
-      if ((ctx.child as WorkspacePane).id !== targetPane.id) return false
-
-      const newPane = createDefaultPane()
-      newPane.profileId = (ctx.child as WorkspacePane).profileId
-
-      if (ctx.node.orientation === targetOrientation) {
-        // Same orientation: split the target pane's ratio in half
-        const insertIndex = isBefore ? ctx.index : ctx.index + 1
-        const originalRatio = ctx.node.ratios[ctx.index]
-        const halfRatio = originalRatio / 2
-        ctx.node.children.splice(insertIndex, 0, newPane)
-        ctx.node.ratios.splice(ctx.index, 1, halfRatio, halfRatio)
-      } else {
-        // Different orientation: wrap entire node in new split
-        const nodeCopy: WorkspaceSplit = {
-          orientation: ctx.node.orientation,
-          ratios: [...ctx.node.ratios],
-          children: [...ctx.node.children]
-        }
-        const wrapper: WorkspaceSplit = {
-          orientation: targetOrientation,
-          ratios: [0.5, 0.5],
-          children: isBefore ? [newPane, nodeCopy] : [nodeCopy, newPane]
-        }
-
-        if (ctx.node === this.workspace.root) {
-          this.workspace.root = wrapper
-        } else if (ctx.parent) {
-          const nodeIndex = ctx.parent.children.indexOf(ctx.node)
-          if (nodeIndex !== -1) {
-            ctx.parent.children[nodeIndex] = wrapper
-          }
-        }
-      }
-      return true
-    })
-  }
-
 }

@@ -7,13 +7,9 @@ import { WorkspaceEditorService } from '../services/workspaceEditor.service'
 import { DeleteConfirmModalComponent } from './deleteConfirmModal.component'
 import {
   Workspace,
-  WorkspacePane,
-  WorkspaceSplit,
   TabbyProfile,
-  countPanes,
   createDefaultWorkspace,
   deepClone,
-  isWorkspaceSplit,
 } from '../models/workspace.model'
 
 const SETTINGS_MAX_WIDTH = 'none'
@@ -116,20 +112,12 @@ export class WorkspaceListComponent implements OnInit, OnDestroy, AfterViewInit 
   createWorkspace(): void {
     const defaultProfileId = this.cachedProfiles[0]?.id || ''
     const workspace = createDefaultWorkspace()
-    this.setProfileForAllPanes(workspace.root, defaultProfileId)
+    workspace.panes.forEach((pane) => { pane.profileId = defaultProfileId })
     this.selectedWorkspace = null
     this.editingWorkspace = workspace
     this.isCreatingNew = true
     this.updateDisplayTabs()
     this.cdr.detectChanges()
-  }
-
-  private setProfileForAllPanes(node: WorkspacePane | WorkspaceSplit, profileId: string): void {
-    if (isWorkspaceSplit(node)) {
-      node.children.forEach((child) => this.setProfileForAllPanes(child, profileId))
-    } else {
-      node.profileId = profileId
-    }
   }
 
   editWorkspace(workspace: Workspace): void {
@@ -223,11 +211,7 @@ export class WorkspaceListComponent implements OnInit, OnDestroy, AfterViewInit 
   }
 
   getPaneCount(workspace: Workspace): number {
-    return countPanes(workspace.root)
-  }
-
-  getOrientationLabel(workspace: Workspace): string {
-    return workspace.root.orientation === 'horizontal' ? 'horizontal' : 'vertical'
+    return workspace.panes.length
   }
 
   get hasUnsavedChanges(): boolean {
@@ -265,9 +249,11 @@ export class WorkspaceListComponent implements OnInit, OnDestroy, AfterViewInit 
       }
 
       const profile = await this.workspaceService.generateTabbyProfile(workspace)
-      this.zone.run(() => {
-        this.profilesService.openNewTabForProfile(profile)
-      })
+      if (profile) {
+        this.zone.run(() => {
+          this.profilesService.openNewTabForProfile(profile)
+        })
+      }
     } finally {
       this.openingWorkspaceId = null
       this.cdr.detectChanges()

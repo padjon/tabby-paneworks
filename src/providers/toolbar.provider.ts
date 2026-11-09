@@ -21,7 +21,7 @@ const ICON_BOLT = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" f
 
 const SELECTOR_SETTINGS_ID = '__settings__'
 
-import { countPanes, parsePaneMarker } from '../models/workspace.model'
+import { parsePaneMarker } from '../models/workspace.model'
 
 /** Recovery token structure for workspace tabs */
 interface RecoveryTokenWithWorkspace {
@@ -140,7 +140,7 @@ export class WorkspaceToolbarProvider extends ToolbarButtonProvider {
 
     const options = workspaces.map((ws) => ({
       name: ws.name,
-      description: `${countPanes(ws.root)} panes`,
+      description: `${ws.panes.length} panes`,
       icon: ws.icon || 'grid',
       color: ws.color,
       result: ws.id
@@ -182,6 +182,8 @@ export class WorkspaceToolbarProvider extends ToolbarButtonProvider {
     }
 
     const profile = await this.workspaceService.generateTabbyProfile(workspace)
-    this.profilesService.openNewTabForProfile(profile)
+    if (profile) {
+      this.profilesService.openNewTabForProfile(profile)
+    }
   }
 }

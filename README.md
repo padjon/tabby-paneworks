@@ -44,44 +44,23 @@ The tag starts `.github/workflows/release.yml`: build, publish to npm (trusted p
 
 ## Use
 
-Settings > Paneworks (or the grid button in the toolbar): create a workspace, split it, set name, profile, working directory and startup command per pane, then open it from the toolbar.
+Settings > Paneworks (or the grid button in the toolbar): create a workspace, add its panes (name, profile, working directory, startup command, on/off), set the minimum pane size, then open it from the toolbar.
 
-## Sidebar, layouts and focus view
+A workspace is a list of panes; there is no fixed split layout. Paneworks arranges the panes itself.
 
-Every Paneworks tab has a sidebar (collapse it with «):
+## Sidebar, "View all" and focus view
 
-- **Layouts**: click one to rearrange the tab. The main layout is the one you design in the editor; further layouts are set in the config (below).
-- **Panes**: every pane of the workspace with its live title. Click a pane for its focus view (that pane alone); click it again to go back to the layout. A filled dot marks panes on screen; a coloured dot marks a hidden pane with new output.
+Every Paneworks tab has a sidebar on the left (collapse it with «):
 
-Switching never closes a pane: panes that leave the view keep running in the background, and come back as they were. Panes that no layout has shown yet start the first time they are shown. Closing the tab closes all of its panes.
+- **View all** shows every switched-on pane in a grid. The grid follows from the workspace's minimum pane size (default 600 × 260 px): as many panes as fit, in as many rows as give each pane the most room. Panes that are on but don't fit are marked "no room". The grid adapts when the window or sidebar changes size.
+- **Pane title**: click it for the focus view (that pane alone, full size); click it again, or "View all", to go back.
+- **Switch**: turns a pane on or off for "View all". Off panes stay reachable through their title.
+- **Drag and drop** (⋮⋮ handle): sorts the panes; the order is the grid order.
+- Dots: filled = on screen; coloured = hidden pane with new output.
 
-Further layouts and panes outside the main layout are set in Tabby's `config.yaml` for now (Settings > Config file), under `paneworks.workspaces[]`:
+Switches, order and minimum size are saved in the workspace. Hidden panes are never closed: they keep running and come back as they were. A pane starts the first time it is shown. Closing the tab closes all of its panes.
 
-```yaml
-mainLayoutName: Main 1–4        # sidebar name of the main layout (default "Main")
-root: { ... }                   # main layout, defines its panes (made in the editor)
-extraPanes:                     # panes outside the main layout
-  - id: <uuid>
-    profileId: local:powershell
-    cwd: d:\project
-    startupCommand: c 5
-    name: ''
-layouts:                        # further layouts; leaves reference panes by id
-  - id: <uuid>
-    name: Panes 5–8
-    root:
-      orientation: vertical     # vertical = rows stacked, horizontal = side by side
-      ratios: [0.5, 0.5]
-      children:
-        - orientation: horizontal
-          ratios: [0.5, 0.5]
-          children:
-            - paneId: <uuid of a pane>
-            - paneId: <uuid of a pane>
-        - paneId: <uuid of a pane>
-```
-
-The editor keeps these fields when it saves. A layout entry whose pane no longer exists is skipped.
+Workspaces saved by older versions (or TabbySpaces) with a split tree are read as a pane list in reading order.
 
 ## License
 

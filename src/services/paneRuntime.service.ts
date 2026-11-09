@@ -125,7 +125,7 @@ export class PaneRuntimeService {
         return
       }
       const workspace = this.workspaces.getWorkspace(workspaceId)
-      const paneName = workspace ? findPane(workspace.root, paneId)?.name : undefined
+      const paneName = workspace ? findPane(workspace, paneId)?.name : undefined
       const label = formatPaneLabel(paneName, tab.title)
       if (!label || label === tab.customTitle) return
       lastLabel = label
