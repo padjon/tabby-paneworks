@@ -183,6 +183,12 @@ export class WorkspaceEditorService {
     }
   }
 
+  /** Token for one pane of a workspace, used to create panes on demand (layouts, focus view). */
+  async createPaneToken(workspace: Workspace, pane: WorkspacePane): Promise<TabbyRecoveryToken> {
+    await this.getCachedProfiles()
+    return this.generatePaneToken(pane, workspace.name, workspace.id)
+  }
+
   private generateRecoveryToken(split: WorkspaceSplit, workspaceName: string, workspaceId: string): TabbyRecoveryToken {
     return {
       type: 'app:split-tab',

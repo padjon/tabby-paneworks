@@ -46,6 +46,43 @@ The tag starts `.github/workflows/release.yml`: build, publish to npm (trusted p
 
 Settings > Paneworks (or the grid button in the toolbar): create a workspace, split it, set name, profile, working directory and startup command per pane, then open it from the toolbar.
 
+## Sidebar, layouts and focus view
+
+Every Paneworks tab has a sidebar (collapse it with «):
+
+- **Layouts**: click one to rearrange the tab. The main layout is the one you design in the editor; further layouts are set in the config (below).
+- **Panes**: every pane of the workspace with its live title. Click a pane for its focus view (that pane alone); click it again to go back to the layout. A filled dot marks panes on screen; a coloured dot marks a hidden pane with new output.
+
+Switching never closes a pane: panes that leave the view keep running in the background, and come back as they were. Panes that no layout has shown yet start the first time they are shown. Closing the tab closes all of its panes.
+
+Further layouts and panes outside the main layout are set in Tabby's `config.yaml` for now (Settings > Config file), under `paneworks.workspaces[]`:
+
+```yaml
+mainLayoutName: Main 1–4        # sidebar name of the main layout (default "Main")
+root: { ... }                   # main layout, defines its panes (made in the editor)
+extraPanes:                     # panes outside the main layout
+  - id: <uuid>
+    profileId: local:powershell
+    cwd: d:\project
+    startupCommand: c 5
+    name: ''
+layouts:                        # further layouts; leaves reference panes by id
+  - id: <uuid>
+    name: Panes 5–8
+    root:
+      orientation: vertical     # vertical = rows stacked, horizontal = side by side
+      ratios: [0.5, 0.5]
+      children:
+        - orientation: horizontal
+          ratios: [0.5, 0.5]
+          children:
+            - paneId: <uuid of a pane>
+            - paneId: <uuid of a pane>
+        - paneId: <uuid of a pane>
+```
+
+The editor keeps these fields when it saves. A layout entry whose pane no longer exists is skipped.
+
 ## License
 
 MIT, see LICENSE.

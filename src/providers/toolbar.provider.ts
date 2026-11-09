@@ -3,6 +3,7 @@ import { ToolbarButtonProvider, ToolbarButton, ProfilesService, AppService, Spli
 import { BaseTerminalTabComponent } from 'tabby-terminal'
 import { WorkspaceEditorService } from '../services/workspaceEditor.service'
 import { PaneRuntimeService } from '../services/paneRuntime.service'
+import { LayoutService } from '../services/layout.service'
 import { WorkspaceBackgroundService } from '../services/workspaceBackground.service'
 import { SettingsTabComponent } from 'tabby-settings'
 import { CONFIG_KEY, DISPLAY_NAME, IS_DEV } from '../build-config'
@@ -34,6 +35,8 @@ export class WorkspaceToolbarProvider extends ToolbarButtonProvider {
     private profilesService: ProfilesService,
     private app: AppService,
     private startupService: PaneRuntimeService,
+    // Injected so the sidebar/layout service runs from startup
+    private _layoutService: LayoutService,
     private backgroundService: WorkspaceBackgroundService
   ) {
     super()

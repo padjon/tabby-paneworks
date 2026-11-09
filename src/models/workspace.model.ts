@@ -75,14 +75,74 @@ export interface WorkspaceBackground {
   value: string  // CSS value: hex, gradient string, or URL
 }
 
+/** A pane placed in a layout, referenced by its id (panes are defined in `root` or `extraPanes`). */
+export interface LayoutPaneRef {
+  paneId: string
+}
+
+export interface LayoutSplit {
+  orientation: 'horizontal' | 'vertical'
+  ratios: number[]
+  children: (LayoutPaneRef | LayoutSplit)[]
+}
+
+/** A further arrangement of the workspace's panes, selectable in the sidebar. */
+export interface WorkspaceLayout {
+  id: string
+  name: string
+  root: LayoutSplit
+}
+
 export interface Workspace {
   id: string
   name: string
   icon?: string
   color?: string
   background?: WorkspaceBackground
+  /** The main layout; it also defines its panes. Opened when the workspace opens. */
   root: WorkspaceSplit
+  /** Sidebar name of the main layout (default "Main"). */
+  mainLayoutName?: string
+  /** Panes that are not in the main layout; started the first time a layout or focus view shows them. */
+  extraPanes?: WorkspacePane[]
+  /** Further layouts over the same panes. */
+  layouts?: WorkspaceLayout[]
   launchOnStartup?: boolean
+}
+
+export const MAIN_LAYOUT_ID = 'main'
+
+/** All panes of a workspace: main layout first, then extra panes. */
+export function allPanes(workspace: Workspace): WorkspacePane[] {
+  const panes: WorkspacePane[] = []
+  const walk = (node: WorkspacePane | WorkspaceSplit) => {
+    if (isWorkspaceSplit(node)) node.children.forEach(walk)
+    else panes.push(node)
+  }
+  walk(workspace.root)
+  return [...panes, ...(workspace.extraPanes ?? [])]
+}
+
+/** All layouts of a workspace, the main layout (from `root`) first. */
+export function allLayouts(workspace: Workspace): WorkspaceLayout[] {
+  const toRefs = (split: WorkspaceSplit): LayoutSplit => ({
+    orientation: split.orientation,
+    ratios: [...split.ratios],
+    children: split.children.map((c) => isWorkspaceSplit(c) ? toRefs(c) : { paneId: c.id }),
+  })
+  return [
+    { id: MAIN_LAYOUT_ID, name: workspace.mainLayoutName || 'Main', root: toRefs(workspace.root) },
+    ...(workspace.layouts ?? []),
+  ]
+}
+
+export function isLayoutSplit(node: LayoutPaneRef | LayoutSplit): node is LayoutSplit {
+  return 'children' in node
+}
+
+/** Pane ids of a layout in reading order. */
+export function layoutPaneIds(split: LayoutSplit): string[] {
+  return split.children.flatMap((c) => isLayoutSplit(c) ? layoutPaneIds(c) : [c.paneId])
 }
 
 // Preset backgrounds for quick selection

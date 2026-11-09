@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core'
 import { AppService, BaseTabComponent, SplitTabComponent } from 'tabby-core'
 import { BaseTerminalTabComponent } from 'tabby-terminal'
-import { first, timeout, of } from 'rxjs'
+import { first, timeout, of, Subject } from 'rxjs'
 import { catchError } from 'rxjs/operators'
 import { DISPLAY_NAME } from '../build-config'
 import { findPane, formatPaneLabel, parsePaneMarker } from '../models/workspace.model'
@@ -34,6 +34,9 @@ const RESCAN_DELAYS_MS = [0, 300, 1000, 3000, 8000]
  */
 @Injectable()
 export class PaneRuntimeService {
+  /** Emitted whenever a split tab containing Paneworks panes is scanned (may repeat). */
+  readonly workspaceSplitFound$ = new Subject<{ split: SplitTabComponent, workspaceId: string }>()
+
   private pendingCommands = new Map<string, PendingCommand>()
   private watchedSplits = new WeakSet<SplitTabComponent>()
   private attachedPanes = new WeakSet<BaseTabComponent>()
@@ -86,6 +89,7 @@ export class PaneRuntimeService {
 
     if (split) {
       this.pinSplitTitle(split, marker.workspaceId)
+      this.workspaceSplitFound$.next({ split, workspaceId: marker.workspaceId })
     }
 
     if (this.attachedPanes.has(tab)) return

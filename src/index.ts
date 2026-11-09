@@ -9,6 +9,7 @@ import { WorkspaceEditorSettingsProvider } from './providers/settings.provider'
 import { WorkspaceToolbarProvider } from './providers/toolbar.provider'
 import { WorkspaceEditorService } from './services/workspaceEditor.service'
 import { PaneRuntimeService } from './services/paneRuntime.service'
+import { LayoutService } from './services/layout.service'
 import { WorkspaceBackgroundService } from './services/workspaceBackground.service'
 
 import { WorkspaceListComponent } from './components/workspaceList.component'
@@ -25,6 +26,7 @@ import { DeleteConfirmModalComponent } from './components/deleteConfirmModal.com
     { provide: ToolbarButtonProvider, useClass: WorkspaceToolbarProvider, multi: true },
     WorkspaceEditorService,
     PaneRuntimeService,
+    LayoutService,
     WorkspaceBackgroundService,
   ],
   declarations: [
