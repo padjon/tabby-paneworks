@@ -1,42 +1,27 @@
 import { NgModule } from '@angular/core'
 import { CommonModule } from '@angular/common'
-import { FormsModule } from '@angular/forms'
 import { ConfigProvider, ToolbarButtonProvider } from 'tabby-core'
-import { SettingsTabProvider } from 'tabby-settings'
 
 import { WorkspaceEditorConfigProvider } from './providers/config.provider'
-import { WorkspaceEditorSettingsProvider } from './providers/settings.provider'
 import { WorkspaceToolbarProvider } from './providers/toolbar.provider'
 import { WorkspaceEditorService } from './services/workspaceEditor.service'
 import { PaneRuntimeService } from './services/paneRuntime.service'
 import { LayoutService } from './services/layout.service'
-import { WorkspaceBackgroundService } from './services/workspaceBackground.service'
 
-import { WorkspaceListComponent } from './components/workspaceList.component'
-import { WorkspaceEditorComponent } from './components/workspaceEditor.component'
-import { DeleteConfirmModalComponent } from './components/deleteConfirmModal.component'
-
+/**
+ * Paneworks: no settings page. The toolbar button opens and creates workspaces;
+ * everything else is managed in the sidebar of a workspace tab (LayoutService).
+ */
 @NgModule({
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule],
   providers: [
     { provide: ConfigProvider, useClass: WorkspaceEditorConfigProvider, multi: true },
-    { provide: SettingsTabProvider, useClass: WorkspaceEditorSettingsProvider, multi: true },
     { provide: ToolbarButtonProvider, useClass: WorkspaceToolbarProvider, multi: true },
     WorkspaceEditorService,
     PaneRuntimeService,
     LayoutService,
-    WorkspaceBackgroundService,
-  ],
-  declarations: [
-    WorkspaceListComponent,
-    WorkspaceEditorComponent,
-    DeleteConfirmModalComponent,
   ],
 })
-export default class WorkspaceEditorModule {}
+export default class PaneworksModule {}
 
-export {
-  WorkspaceEditorService,
-  WorkspaceEditorConfigProvider,
-  WorkspaceEditorSettingsProvider,
-}
+export { WorkspaceEditorService }

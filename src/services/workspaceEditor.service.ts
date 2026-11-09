@@ -6,7 +6,6 @@ import {
   LayoutSplit,
   isLayoutSplit,
   generateUUID,
-  deepClone,
   TabbyProfile,
   TabbyRecoveryToken,
   TabbySplitLayoutProfile,
@@ -118,22 +117,6 @@ export class WorkspaceEditorService {
       this.notifications.info(`Workspace "${workspace.name}" created`)
     } catch (error) {
       this.notifications.error(`Failed to create workspace "${workspace.name}"`)
-      throw error
-    }
-  }
-
-  /** Updates an existing workspace by ID and shows notification. */
-  async updateWorkspace(workspace: Workspace): Promise<void> {
-    try {
-      const workspaces = this.getWorkspaces()
-      const index = workspaces.findIndex((w) => w.id === workspace.id)
-      if (index !== -1) {
-        workspaces[index] = workspace
-        await this.saveWorkspaces(workspaces)
-        this.notifications.info(`Workspace "${workspace.name}" updated`)
-      }
-    } catch (error) {
-      this.notifications.error(`Failed to update workspace "${workspace.name}"`)
       throw error
     }
   }
@@ -320,18 +303,6 @@ export class WorkspaceEditorService {
       disableDynamicTitle: false,
       cwd: isWsl ? '' : rawCwd,
     }
-  }
-
-  /** Creates a deep copy of a workspace with new IDs. */
-  duplicateWorkspace(workspace: Workspace): Workspace {
-    const clone = deepClone(workspace)
-    clone.id = generateUUID()
-    clone.name = `${workspace.name} (Copy)`
-    clone.launchOnStartup = false
-    for (const pane of clone.panes) {
-      pane.id = generateUUID()
-    }
-    return clone
   }
 
   private sanitizeForProfileId(name: string): string {

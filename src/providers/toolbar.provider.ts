@@ -1,12 +1,8 @@
 import { Injectable } from '@angular/core'
-import { ToolbarButtonProvider, ToolbarButton, ProfilesService, AppService, SplitTabComponent } from 'tabby-core'
-import { BaseTerminalTabComponent } from 'tabby-terminal'
+import { ToolbarButtonProvider, ToolbarButton, AppService } from 'tabby-core'
 import { WorkspaceEditorService } from '../services/workspaceEditor.service'
-import { PaneRuntimeService } from '../services/paneRuntime.service'
 import { LayoutService } from '../services/layout.service'
-import { WorkspaceBackgroundService } from '../services/workspaceBackground.service'
-import { SettingsTabComponent } from 'tabby-settings'
-import { CONFIG_KEY, DISPLAY_NAME, IS_DEV } from '../build-config'
+import { DISPLAY_NAME, IS_DEV } from '../build-config'
 
 const ICON_GRID = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
   <rect x="3" y="3" width="7" height="7"/>
@@ -19,31 +15,22 @@ const ICON_BOLT = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" f
   <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
 </svg>`
 
-const SELECTOR_SETTINGS_ID = '__settings__'
+const NEW_WORKSPACE = '__new__'
 
-import { parsePaneMarker } from '../models/workspace.model'
-
-/** Recovery token structure for workspace tabs */
-interface RecoveryTokenWithWorkspace {
-  paneworksWorkspaceId?: string
-}
-
+/**
+ * The toolbar button: the entry point outside a workspace tab. Lists the workspaces
+ * (open one, or bring it to the front if already open) and creates new ones.
+ * Everything else is managed in the workspace tab's sidebar.
+ */
 @Injectable()
 export class WorkspaceToolbarProvider extends ToolbarButtonProvider {
   constructor(
     private workspaceService: WorkspaceEditorService,
-    private profilesService: ProfilesService,
     private app: AppService,
-    private startupService: PaneRuntimeService,
-    // Injected so the sidebar/layout service runs from startup
-    private _layoutService: LayoutService,
-    private backgroundService: WorkspaceBackgroundService
+    private layout: LayoutService
   ) {
     super()
-    // Initialize background service to listen for tab events
-    this.backgroundService.initialize()
-
-    // Wait for Tabby to finish recovery before launching startup workspaces
+    // Wait for Tabby to finish recovering tabs before launching startup workspaces
     this.waitForTabbyReady().then(() => {
       this.workspaceService.cleanupOrphanedProfiles()
       this.launchStartupWorkspaces()
@@ -55,68 +42,25 @@ export class WorkspaceToolbarProvider extends ToolbarButtonProvider {
       let lastTabCount = -1
       const checkStable = () => {
         const currentCount = this.app.tabs.length
-        if (currentCount === lastTabCount && currentCount >= 0) {
+        if (currentCount === lastTabCount) {
           resolve()
         } else {
           lastTabCount = currentCount
           setTimeout(checkStable, 300)
         }
       }
-      // Initial delay to let Tabby start loading
       setTimeout(checkStable, 500)
     })
   }
 
   private async launchStartupWorkspaces(): Promise<void> {
-    const workspaces = this.workspaceService.getWorkspaces()
-    const startupWorkspaces = workspaces.filter(w => w.launchOnStartup)
-
-    for (const workspace of startupWorkspaces) {
-      if (this.isWorkspaceAlreadyOpen(workspace.id)) {
+    for (const workspace of this.workspaceService.getWorkspaces().filter((w) => w.launchOnStartup)) {
+      if (this.layout.findOpenTab(workspace.id)) {
         console.log(`[${DISPLAY_NAME}] Workspace "${workspace.name}" already open, skipping`)
         continue
       }
-      await this.openWorkspace(workspace.id)
+      await this.layout.openWorkspace(workspace.id)
     }
-  }
-
-  /**
-   * Type-safe helper to extract workspace ID from tab's recovery token.
-   */
-  private getRecoveryWorkspaceId(tab: unknown): string | undefined {
-    if (tab && typeof tab === 'object' && 'recoveryToken' in tab) {
-      const token = (tab as { recoveryToken?: RecoveryTokenWithWorkspace }).recoveryToken
-      return token?.paneworksWorkspaceId
-    }
-    return undefined
-  }
-
-  private isWorkspaceAlreadyOpen(workspaceId: string): boolean {
-    const profilePrefix = `split-layout:${CONFIG_KEY}:`
-
-    for (const tab of this.app.tabs) {
-      if (tab instanceof SplitTabComponent) {
-        // Strategy 1: Check recoveryToken.paneworksWorkspaceId (for restored tabs)
-        if (this.getRecoveryWorkspaceId(tab) === workspaceId) {
-          return true
-        }
-
-        // Strategy 2: Check pane markers / profile ID (for freshly opened tabs)
-        for (const child of tab.getAllTabs()) {
-          if (child instanceof BaseTerminalTabComponent) {
-            if (parsePaneMarker(child.profile?.group)?.workspaceId === workspaceId) {
-              return true
-            }
-            const profileId = child.profile?.id ?? ''
-            // Strict matching: prefix + workspaceId at the end
-            if (profileId.startsWith(profilePrefix) && profileId.endsWith(`:${workspaceId}`)) {
-              return true
-            }
-          }
-        }
-      }
-    }
-    return false
   }
 
   provide(): ToolbarButton[] {
@@ -125,65 +69,32 @@ export class WorkspaceToolbarProvider extends ToolbarButtonProvider {
         icon: IS_DEV ? ICON_BOLT : ICON_GRID,
         title: DISPLAY_NAME,
         weight: 5,
-        click: () => this.showWorkspaceSelector()
-      }
+        click: () => this.showWorkspaceSelector(),
+      },
     ]
   }
 
   private async showWorkspaceSelector(): Promise<void> {
-    const workspaces = this.workspaceService.getWorkspaces()
-
-    if (workspaces.length === 0) {
-      this.openSettings()
-      return
-    }
-
-    const options = workspaces.map((ws) => ({
+    const options = this.workspaceService.getWorkspaces().map((ws) => ({
       name: ws.name,
-      description: `${ws.panes.length} panes`,
-      icon: ws.icon || 'grid',
+      description: `${ws.panes.length} panes${this.layout.findOpenTab(ws.id) ? ' · open' : ''}`,
+      icon: ws.icon || 'columns',
       color: ws.color,
-      result: ws.id
+      result: ws.id,
     }))
-
-    // Add option to open settings
     options.push({
-      name: 'Manage Workspaces...',
-      description: 'Create and edit workspaces',
-      icon: 'cog',
+      name: 'New workspace',
+      description: 'Create a workspace with one pane; set it up in its sidebar',
+      icon: 'plus',
       color: undefined,
-      result: SELECTOR_SETTINGS_ID
+      result: NEW_WORKSPACE,
     })
 
-    const selectedId = await this.app.showSelector('Select Workspace', options)
-
-    if (selectedId === SELECTOR_SETTINGS_ID) {
-      this.openSettings()
-    } else if (selectedId) {
-      this.openWorkspace(selectedId)
-    }
-  }
-
-  private openSettings(): void {
-    this.app.openNewTabRaw({ type: SettingsTabComponent, inputs: { activeTab: CONFIG_KEY } })
-  }
-
-  private async openWorkspace(workspaceId: string): Promise<void> {
-    const workspaces = this.workspaceService.getWorkspaces()
-    const workspace = workspaces.find((w) => w.id === workspaceId)
-
-    if (!workspace) return
-
-    // Register startup commands BEFORE opening the workspace
-    // Commands will be sent via sendInput() when terminals open
-    const commands = this.workspaceService.collectStartupCommands(workspace)
-    if (commands.length > 0) {
-      this.startupService.registerCommands(commands)
-    }
-
-    const profile = await this.workspaceService.generateTabbyProfile(workspace)
-    if (profile) {
-      this.profilesService.openNewTabForProfile(profile)
+    const selected = await this.app.showSelector(DISPLAY_NAME, options)
+    if (selected === NEW_WORKSPACE) {
+      await this.layout.createWorkspace()
+    } else if (selected) {
+      await this.layout.openWorkspace(selected)
     }
   }
 }

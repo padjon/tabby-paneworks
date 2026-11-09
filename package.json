@@ -1,7 +1,7 @@
 {
   "name": "tabby-paneworks",
   "version": "0.3.0",
-  "description": "Workspaces for Tabby: predefined split layouts with startup commands; panes show their program title, the tab shows the workspace name (fork of TabbySpaces)",
+  "description": "Workspaces for Tabby: terminal panes with startup commands, arranged automatically by a minimum pane size, managed from a sidebar (focus view, on/off, drag-and-drop order). Panes show their program title; the tab shows the workspace name.",
   "keywords": [
     "tabby",
     "tabby-plugin",
@@ -71,6 +71,6 @@
   "tabbyPlugin": {
     "name": "paneworks",
     "displayName": "Paneworks",
-    "description": "Workspaces for Tabby: predefined split layouts with startup commands; panes show their program title, the tab shows the workspace name (fork of TabbySpaces)"
+    "description": "Workspaces for Tabby: terminal panes with startup commands, arranged automatically by a minimum pane size, managed from a sidebar (focus view, on/off, drag-and-drop order). Panes show their program title; the tab shows the workspace name."
   }
 }
