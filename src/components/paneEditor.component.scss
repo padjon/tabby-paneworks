@@ -1,0 +1,64 @@
+@use '../styles/index' as *;
+
+// Inline pane details panel
+.pane-details {
+  background: var(--theme-bg-more-more);
+  border-radius: $radius-sm;
+  padding: $spacing-lg;
+  padding-top: $spacing-lg;
+  margin-top: $spacing-xl;
+  border-left: 2px solid var(--theme-primary);
+  border-top: 1px solid var(--theme-border, $fallback-border);
+}
+
+.pane-details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: $spacing-lg;
+}
+
+.pane-details-title {
+  font-size: $font-sm;
+  color: var(--theme-fg);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+}
+
+// 2-column grid for pane form
+.pane-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: $spacing-lg;
+}
+
+@media (max-width: 600px) {
+  .pane-form {
+    grid-template-columns: 1fr;
+  }
+}
+
+.form-group {
+  label {
+    @include form-label;
+  }
+}
+
+.form-control {
+  width: 100%;
+  @include form-input(var(--theme-bg));
+  font-size: $font-sm;
+  // Override Tabby's global border reset
+  border: 1px solid var(--theme-border, $fallback-border) !important;
+
+  &:focus {
+    border-color: var(--theme-primary) !important;
+  }
+}
+
+select.form-control {
+  cursor: pointer;
+  appearance: auto; // Show dropdown arrow
+}

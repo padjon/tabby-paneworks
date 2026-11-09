@@ -1,0 +1,390 @@
+import { Injectable } from '@angular/core'
+import { ConfigService, NotificationsService, ProfilesService } from 'tabby-core'
+import {
+  Workspace,
+  WorkspacePane,
+  WorkspaceSplit,
+  isWorkspaceSplit,
+  generateUUID,
+  deepClone,
+  TabbyProfile,
+  TabbyRecoveryToken,
+  TabbySplitLayoutProfile,
+  makePaneMarker,
+  formatPaneLabel,
+} from '../models/workspace.model'
+import { CONFIG_KEY, DISPLAY_NAME } from '../build-config'
+import { PendingCommand } from './paneRuntime.service'
+
+@Injectable({ providedIn: 'root' })
+export class WorkspaceEditorService {
+  private cachedProfiles: TabbyProfile[] | null = null
+  private cacheTimestamp: number = 0
+  private readonly CACHE_TTL = 30000 // 30 seconds
+
+  constructor(
+    private config: ConfigService,
+    private notifications: NotificationsService,
+    private profilesService: ProfilesService
+  ) {}
+
+  private async getCachedProfiles(): Promise<TabbyProfile[]> {
+    const now = Date.now()
+    if (!this.cachedProfiles || now - this.cacheTimestamp > this.CACHE_TTL) {
+      this.cachedProfiles = (await this.profilesService.getProfiles()) as TabbyProfile[]
+      this.cacheTimestamp = now
+    }
+    return this.cachedProfiles
+  }
+
+  /** Returns all saved workspaces from config. */
+  getWorkspaces(): Workspace[] {
+    return this.config.store?.[CONFIG_KEY]?.workspaces ?? []
+  }
+
+  /**
+   * Saves the workspace list to config.
+   * @throws Error if config store is not initialized
+   */
+  async saveWorkspaces(workspaces: Workspace[]): Promise<void> {
+    if (!this.config.store?.[CONFIG_KEY]) {
+      throw new Error('Config store not initialized')
+    }
+    this.config.store[CONFIG_KEY].workspaces = workspaces
+    await this.saveConfig()
+  }
+
+  /** Adds a new workspace and shows notification. */
+  async addWorkspace(workspace: Workspace): Promise<void> {
+    try {
+      const workspaces = this.getWorkspaces()
+      workspaces.push(workspace)
+      await this.saveWorkspaces(workspaces)
+      this.notifications.info(`Workspace "${workspace.name}" created`)
+    } catch (error) {
+      this.notifications.error(`Failed to create workspace "${workspace.name}"`)
+      throw error
+    }
+  }
+
+  /** Updates an existing workspace by ID and shows notification. */
+  async updateWorkspace(workspace: Workspace): Promise<void> {
+    try {
+      const workspaces = this.getWorkspaces()
+      const index = workspaces.findIndex((w) => w.id === workspace.id)
+      if (index !== -1) {
+        workspaces[index] = workspace
+        await this.saveWorkspaces(workspaces)
+        this.notifications.info(`Workspace "${workspace.name}" updated`)
+      }
+    } catch (error) {
+      this.notifications.error(`Failed to update workspace "${workspace.name}"`)
+      throw error
+    }
+  }
+
+  /** Deletes a workspace by ID and shows notification. */
+  async deleteWorkspace(workspaceId: string): Promise<void> {
+    const workspaces = this.getWorkspaces()
+    const workspace = workspaces.find((w) => w.id === workspaceId)
+    try {
+      const filtered = workspaces.filter((w) => w.id !== workspaceId)
+      await this.saveWorkspaces(filtered)
+      if (workspace) {
+        this.notifications.info(`Workspace "${workspace.name}" deleted`)
+      }
+    } catch (error) {
+      this.notifications.error(`Failed to delete workspace "${workspace?.name || workspaceId}"`)
+      throw error
+    }
+  }
+
+  /** Returns all profiles available for use in workspaces (local, SSH, serial, etc.). */
+  async getAvailableProfiles(): Promise<TabbyProfile[]> {
+    const allProfiles = await this.profilesService.getProfiles()
+    return allProfiles.filter(
+      (p) => !p.id?.startsWith('split-layout:')
+    ) as TabbyProfile[]
+  }
+
+  /**
+   * Cleanup orphaned profiles from previous plugin versions.
+   * Call this once on plugin init.
+   */
+  cleanupOrphanedProfiles(): void {
+    if (!this.config.store?.profiles) {
+      return
+    }
+    const profiles: TabbyProfile[] = this.config.store.profiles
+    const prefix = `split-layout:${CONFIG_KEY}:`
+    const filtered = profiles.filter((p) => !p.id?.startsWith(prefix))
+    if (filtered.length !== profiles.length) {
+      this.config.store.profiles = filtered
+      this.config.save()
+      console.log(`[${DISPLAY_NAME}] Cleaned up ${profiles.length - filtered.length} orphaned profiles`)
+    }
+
+    // Repair any workspaces with corrupted ratios (from pre-0.2.3 bug where
+    // Tabby's normalize() mutated config ratios via shared array reference)
+    this.repairCorruptedRatios()
+  }
+
+  /** Repairs workspaces where ratios array length doesn't match children count. */
+  private repairCorruptedRatios(): void {
+    const workspaces = this.getWorkspaces()
+    let repaired = false
+
+    for (const workspace of workspaces) {
+      if (this.repairSplitRatios(workspace.root)) {
+        repaired = true
+        console.log(`[${DISPLAY_NAME}] Repaired corrupted ratios in workspace "${workspace.name}"`)
+      }
+    }
+
+    if (repaired) {
+      this.config.save()
+    }
+  }
+
+  private repairSplitRatios(split: WorkspaceSplit): boolean {
+    let changed = false
+
+    // Recursively repair children first
+    for (const child of split.children) {
+      if (isWorkspaceSplit(child) && this.repairSplitRatios(child)) {
+        changed = true
+      }
+    }
+
+    // Fix ratios/children count mismatch
+    if (split.ratios.length !== split.children.length) {
+      split.ratios = split.children.map(() => 1 / split.children.length)
+      changed = true
+    }
+
+    return changed
+  }
+
+  /** Generates a Tabby split-layout profile from a workspace for opening. */
+  async generateTabbyProfile(workspace: Workspace): Promise<TabbySplitLayoutProfile> {
+    await this.getCachedProfiles()
+    const safeName = this.sanitizeForProfileId(workspace.name)
+    return {
+      id: `split-layout:${CONFIG_KEY}:${safeName}:${workspace.id}`,
+      type: 'split-layout',
+      name: workspace.name,
+      group: DISPLAY_NAME,
+      icon: workspace.icon,
+      color: workspace.color,
+      isBuiltin: false,
+      options: {
+        recoveryToken: this.generateRecoveryToken(workspace.root, workspace.name, workspace.id),
+      },
+    }
+  }
+
+  private generateRecoveryToken(split: WorkspaceSplit, workspaceName: string, workspaceId: string): TabbyRecoveryToken {
+    return {
+      type: 'app:split-tab',
+      orientation: split.orientation === 'horizontal' ? 'h' : 'v',
+      ratios: [...split.ratios],
+      workspaceId,
+      // The outer tab always shows the workspace name, never the pane titles
+      tabTitle: workspaceName,
+      disableDynamicTitle: true,
+      children: split.children.map((child) => {
+        if (isWorkspaceSplit(child)) {
+          return this.generateRecoveryToken(child, workspaceName, workspaceId)
+        }
+        return this.generatePaneToken(child, workspaceName, workspaceId)
+      }),
+    }
+  }
+
+  private generatePaneToken(pane: WorkspacePane, workspaceName: string, workspaceId: string): TabbyRecoveryToken {
+    const baseProfile = this.getProfileById(pane.profileId)
+
+    // Marker: lets PaneRuntimeService find this pane (startup command, live label)
+    // without putting anything visible on it. Initial label: the pane name.
+    const marker = makePaneMarker(workspaceId, pane.id)
+    const initialLabel = formatPaneLabel(pane.name, '')
+
+    if (!baseProfile) {
+      return {
+        type: 'app:local-tab',
+        profile: {
+          type: 'local',
+          name: 'Shell',
+          group: marker,
+        },
+        savedState: false,
+        tabTitle: pane.name || 'Shell',
+        tabCustomTitle: initialLabel,
+        workspaceId,
+        disableDynamicTitle: false,
+      }
+    }
+
+    // Non-local profiles (SSH, serial, telnet): pass profile through, Tabby handles the rest
+    if (!this.isLocalProfile(baseProfile)) {
+      return {
+        type: `app:${baseProfile.type}-tab`,
+        profile: {
+          ...baseProfile,
+          group: marker,
+          disableDynamicTitle: false,
+        },
+        savedState: false,
+        tabTitle: pane.name || baseProfile.name,
+        tabCustomTitle: initialLabel,
+        workspaceId,
+        disableDynamicTitle: false,
+      }
+    }
+
+    // Local profiles: build options with CWD/WSL handling
+    const rawCwd = pane.cwd || baseProfile.options?.cwd || ''
+    const isWsl = this.isWslProfile(baseProfile)
+    const baseArgs = baseProfile.options?.args || []
+
+    const options = {
+      restoreFromPTYID: false,
+      command: baseProfile.options?.command || '',
+      // WSL: inject --cd to set Linux CWD directly (bypasses fs.existsSync validation)
+      args: isWsl && rawCwd ? [...baseArgs, '--cd', rawCwd] : baseArgs,
+      // WSL: don't set cwd (Unix paths fail fs.existsSync on Windows)
+      cwd: isWsl ? '' : rawCwd,
+      env: baseProfile.options?.env || {},
+      width: null,
+      height: null,
+      pauseAfterExit: false,
+      runAsAdministrator: false,
+    }
+
+    // Note: startupCommand is handled via sendInput() in StartupCommandService
+    // to avoid re-execution when Tabby splits the pane
+
+    const profile = {
+      id: baseProfile.id,
+      type: 'local',
+      name: baseProfile.name || 'Shell',
+      group: marker,
+      options,
+      icon: baseProfile.icon || '',
+      color: baseProfile.color || '',
+      disableDynamicTitle: false,
+      weight: 0,
+      isBuiltin: false,
+      isTemplate: false,
+      terminalColorScheme: null,
+      behaviorOnSessionEnd: 'auto',
+    }
+
+    // tabTitle: follows the program's title (dynamic titles stay on)
+    // tabCustomTitle: the pane label; PaneRuntimeService keeps it in sync with the program title
+    // workspaceId: for duplicate detection after Tabby recovery
+    return {
+      type: 'app:local-tab',
+      profile,
+      savedState: false,
+      tabTitle: pane.name || baseProfile.name || 'Shell',
+      tabCustomTitle: initialLabel,
+      workspaceId,
+      disableDynamicTitle: false,
+      cwd: isWsl ? '' : rawCwd,
+    }
+  }
+
+  /** Creates a deep copy of a workspace with new IDs. */
+  duplicateWorkspace(workspace: Workspace): Workspace {
+    const clone = deepClone(workspace)
+    clone.id = generateUUID()
+    clone.name = `${workspace.name} (Copy)`
+    clone.launchOnStartup = false
+    this.regenerateIds(clone.root)
+    return clone
+  }
+
+  private regenerateIds(node: WorkspacePane | WorkspaceSplit): void {
+    if (isWorkspaceSplit(node)) {
+      for (const child of node.children) {
+        this.regenerateIds(child)
+      }
+    } else {
+      node.id = generateUUID()
+    }
+  }
+
+  private sanitizeForProfileId(name: string): string {
+    return name
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      || 'workspace'
+  }
+
+  /** Checks if a profile is a local shell (local, local:wsl, local:powershell, etc.). */
+  private isLocalProfile(profile: TabbyProfile): boolean {
+    return profile.type === 'local' || profile.type?.startsWith('local:') || false
+  }
+
+  /** Detects WSL profiles by ID prefix (built-in) or command path (user-defined). */
+  private isWslProfile(profile: TabbyProfile): boolean {
+    // Built-in WSL profiles: id starts with 'local:wsl'
+    if (profile.id?.startsWith('local:wsl')) {
+      return true
+    }
+    // User-defined WSL profiles: type 'local' with command pointing to wsl.exe
+    const command = (profile.options?.command || '').toLowerCase()
+    return command === 'wsl.exe' || command === 'wsl' || command.endsWith('\\wsl.exe') || command.endsWith('/wsl.exe')
+  }
+
+  private getProfileById(profileId: string): TabbyProfile | undefined {
+    // First: check user profiles in config
+    const userProfiles: TabbyProfile[] = this.config.store?.profiles ?? []
+    const found = userProfiles.find((p) => p.id === profileId)
+    if (found) return found
+
+    // Fallback: check cached profiles (includes built-ins)
+    return this.cachedProfiles?.find((p) => p.id === profileId)
+  }
+
+  /** Collects all startup commands from panes in a workspace. */
+  collectStartupCommands(workspace: Workspace): PendingCommand[] {
+    const commands: PendingCommand[] = []
+    this.collectCommandsFromNode(workspace.root, workspace.name, commands)
+    return commands
+  }
+
+  private collectCommandsFromNode(
+    node: WorkspacePane | WorkspaceSplit,
+    workspaceName: string,
+    commands: PendingCommand[]
+  ): void {
+    if (isWorkspaceSplit(node)) {
+      for (const child of node.children) {
+        this.collectCommandsFromNode(child, workspaceName, commands)
+      }
+    } else if (node.startupCommand) {
+      commands.push({
+        paneId: node.id,
+        command: node.startupCommand,
+      })
+    }
+  }
+
+  /** Returns the workspace with the given id, if it still exists. */
+  getWorkspace(workspaceId: string): Workspace | undefined {
+    return this.getWorkspaces().find((w) => w.id === workspaceId)
+  }
+
+  private async saveConfig(): Promise<void> {
+    try {
+      await this.config.save()
+    } catch (error) {
+      console.error(`[${DISPLAY_NAME}] Save error:`, error)
+      throw error
+    }
+  }
+}

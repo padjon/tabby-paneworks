@@ -1,0 +1,47 @@
+//- Inline pane editor panel (no modal overlay)
+.pane-details
+  .pane-details-header
+    span.pane-details-title
+      i.fas.fa-terminal
+      |  Pane Configuration
+
+  .pane-form
+    .form-group
+      label Name
+      input.form-control(
+        type='text',
+        [(ngModel)]='pane.name',
+        placeholder='Optional pane name'
+      )
+      small.form-text.text-muted
+        | Pane label: name · title of the running program (e.g. "C1 · Claude Code"). Empty: program title only.
+
+    .form-group
+      label Profile
+      select.form-control([(ngModel)]='pane.profileId')
+        option(value='') -- Select Profile --
+        optgroup(label='Local Shells')
+          option(*ngFor='let profile of localProfiles', [value]='profile.id')
+            | {{ profile.name }}
+        optgroup(*ngIf='sshProfiles.length', label='SSH Connections')
+          option(*ngFor='let profile of sshProfiles', [value]='profile.id')
+            | {{ profile.name }}
+        optgroup(*ngIf='otherProfiles.length', label='Other')
+          option(*ngFor='let profile of otherProfiles', [value]='profile.id')
+            | {{ profile.name }}
+
+    .form-group
+      label Working Directory
+      input.form-control(
+        type='text',
+        [(ngModel)]='pane.cwd',
+        placeholder='C:\\path\\to\\project or /home/user/project'
+      )
+
+    .form-group
+      label Startup Command
+      input.form-control(
+        type='text',
+        [(ngModel)]='pane.startupCommand',
+        placeholder='e.g., npm run dev'
+      )
