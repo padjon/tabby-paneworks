@@ -968,6 +968,26 @@ export class LayoutService {
       [data-paneworks] split-tab-pane-label .custom-name {
         font-weight: 600;
       }
+      /* Split handles: Tabby's handle is a 10px band centred on the border between two
+         panes. A bright 4px bar in its middle (inset 3px works for both orientations)
+         stands out against the panes; brighter on hover, accent while dragging. */
+      [data-paneworks] > split-tab-spanner::after {
+        content: '';
+        position: absolute;
+        inset: 3px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, .30);
+        background: color-mix(in srgb, var(--theme-fg, #fff) 32%, transparent);
+        pointer-events: none;
+        transition: background .12s;
+      }
+      [data-paneworks] > split-tab-spanner:hover::after {
+        background: rgba(255, 255, 255, .55);
+        background: color-mix(in srgb, var(--theme-fg, #fff) 60%, transparent);
+      }
+      [data-paneworks] > split-tab-spanner.active::after {
+        background: var(--theme-primary, #4c9aff);
+      }
 
       .paneworks-sidebar {
         --pw-accent: var(--theme-primary, #4c9aff);
