@@ -59,7 +59,7 @@ A workspace is an ordered list of panes; there is no fixed split layout. Panewor
 - **Pane title**: click it to see that pane alone, full size; click it again, or "View all", to go back.
 - **Switch**: on = part of "View all"; off = only reachable through its title.
 - **⋮⋮** (drag the row): sorts the panes; the order is the grid order.
-- **⋯** edits a pane: name, startup command, folder, profile. Command, folder and profile apply when the pane (re)starts; **Restart** saves and restarts it in place. **Remove** deletes the pane and closes its terminal.
+- **⋯** edits a pane: name, label colour (presets, custom or none; shown as the pane label's background and as a swatch in the list), startup command, folder, profile. Command, folder and profile apply when the pane (re)starts; **Restart** saves and restarts it in place. **Remove** deletes the pane and closes its terminal.
 
 Pane states in the list:
 

@@ -21,9 +21,13 @@ import {
   isLayoutSplit,
   layoutPaneIds,
   parsePaneMarker,
+  readableTextColor,
 } from '../models/workspace.model'
 import { PaneRuntimeService } from './paneRuntime.service'
 import { SIDEBAR_WIDTH, WorkspaceEditorService } from './workspaceEditor.service'
+
+/** Quick choices for pane label colours. */
+const PANE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316']
 
 const SIDEBAR_COLLAPSED_WIDTH = 22
 const REFRESH_MS = 1000
@@ -295,6 +299,8 @@ export class LayoutService {
       state.split.focus(live.get(shown[0])!)
       split.recoveryStateChangedHint?.next()
       this.nudgeResize()
+      // Labels of newly attached panes appear after Angular's next pass
+      setTimeout(() => this.applyLabelColors(state, this.workspaces.getWorkspace(state.workspaceId)), 100)
       return true
     } catch (error) {
       console.error(`[${DISPLAY_NAME}] Layout change failed:`, error)
@@ -405,6 +411,10 @@ export class LayoutService {
     const pane = workspace?.panes.find((p) => p.id === paneId)
     if (!workspace || !pane) return
     Object.assign(pane, fields)
+    // Optional fields are stored only when set (the config file never gets empty keys)
+    for (const key of ['name', 'color'] as const) {
+      if (!pane[key]) delete pane[key]
+    }
     await this.workspaces.saveWorkspaceQuietly(workspace)
     state.editingPaneId = null
     this.render(state, true)
@@ -546,9 +556,36 @@ export class LayoutService {
     setTimeout(() => this.refreshGrid(state), 100)
   }
 
+  /**
+   * Pane label colours. Tabby renders one <split-tab-pane-label> per pane, in the
+   * order of split.getAllTabs(), and recreates them when panes change; so this runs
+   * on every sidebar tick and after every layout change.
+   */
+  private applyLabelColors(state: WorkspaceTabState, workspace: Workspace | undefined): void {
+    const splitEl = this.splitElement(state)
+    if (!splitEl || !workspace) return
+    const colors = new Map(workspace.panes.map((p) => [p.id, p.color]))
+    const labels = Array.from(splitEl.querySelectorAll(':scope > split-tab-pane-label'))
+    const tabs = state.split.getAllTabs()
+    labels.forEach((label, i) => {
+      const name = label.querySelector('.custom-name') as HTMLElement | null
+      if (!name) return
+      const id = tabs[i] ? this.paneIdOf(tabs[i]) : null
+      const color = id ? colors.get(id) : undefined
+      if (color) {
+        name.style.background = color
+        name.style.color = readableTextColor(color)
+      } else {
+        name.style.removeProperty('background')
+        name.style.removeProperty('color')
+      }
+    })
+  }
+
   private render(state: WorkspaceTabState, force = false): void {
     const el = state.sidebar
     if (!el || !el.isConnected || state.dragging) return
+    this.applyLabelColors(state, this.workspaces.getWorkspace(state.workspaceId))
     if (!force && (state.editingPaneId || state.menuOpen)) return
     const workspace = this.workspaces.getWorkspace(state.workspaceId)
     const live = this.livePanes(state)
@@ -664,6 +701,11 @@ export class LayoutService {
     })
     this.makeDropTarget(state, row, pane.id)
 
+    const swatch = this.node('span', 'pw-pane-color' + (pane.color ? '' : ' none'))
+    if (pane.color) swatch.style.background = pane.color
+    swatch.title = pane.color ? `Label colour ${pane.color}` : 'No label colour'
+    row.append(swatch)
+
     const text = this.node('span', 'pw-text')
     const main = this.node('span', 'pw-main')
     main.append(this.node('span', 'pw-name', title))
@@ -718,8 +760,39 @@ export class LayoutService {
     }
     profile.value = pane.profileId ?? ''
 
+    // Label colour: presets, a custom picker, or none
+    let chosen = pane.color ?? ''
+    const colors = this.node('div', 'pw-colors')
+    const custom = document.createElement('input')
+    custom.type = 'color'
+    custom.className = 'pw-color-custom'
+    custom.title = 'Custom colour'
+    const paint = () => {
+      colors.querySelectorAll('.pw-swatch').forEach((s) => {
+        s.classList.toggle('selected', (s as HTMLElement).dataset.color === chosen)
+      })
+      custom.classList.toggle('selected', !!chosen && !PANE_COLORS.includes(chosen))
+      if (chosen) custom.value = chosen
+    }
+    for (const color of ['', ...PANE_COLORS]) {
+      const swatch = this.button('pw-swatch' + (color ? '' : ' none'), '', color ? color : 'No colour', () => {
+        chosen = color
+        paint()
+      })
+      swatch.dataset.color = color
+      if (color) swatch.style.background = color
+      colors.append(swatch)
+    }
+    custom.addEventListener('input', () => {
+      chosen = custom.value
+      paint()
+    })
+    colors.append(custom)
+    paint()
+
     box.append(
       this.field('Name', name),
+      this.field('Label colour', colors),
       this.field('Startup command', command),
       this.field('Folder', cwd),
       this.field('Profile', profile),
@@ -727,6 +800,7 @@ export class LayoutService {
     )
     const save = () => this.savePane(state, pane.id, {
       name: name.value.trim(),
+      color: chosen,
       startupCommand: command.value.trim(),
       cwd: cwd.value.trim(),
       profileId: profile.value,
@@ -945,6 +1019,24 @@ export class LayoutService {
       .paneworks-sidebar .pw-pane.focused .pw-name { font-weight: 600; }
       .paneworks-sidebar .pw-pane.editing { background: rgba(127,127,127,.14); }
 
+      .paneworks-sidebar .pw-pane-color { flex: 0 0 8px; height: 8px; border-radius: 2px; }
+      .paneworks-sidebar .pw-pane-color.none { border: 1px dashed rgba(127,127,127,.5); box-sizing: border-box; }
+      .paneworks-sidebar .pw-colors { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+      .paneworks-sidebar .pw-swatch {
+        width: 16px; height: 16px; padding: 0; border-radius: 3px; cursor: pointer;
+        border: 2px solid transparent; box-sizing: border-box;
+      }
+      .paneworks-sidebar .pw-swatch.none {
+        background: repeating-linear-gradient(45deg, transparent 0 3px, rgba(127,127,127,.5) 3px 4px);
+        border-color: rgba(127,127,127,.4);
+      }
+      .paneworks-sidebar .pw-swatch.selected, .paneworks-sidebar .pw-color-custom.selected {
+        border-color: var(--theme-fg, #fff);
+      }
+      .paneworks-sidebar .pw-color-custom {
+        width: 22px; height: 18px; padding: 0; border: 2px solid transparent; border-radius: 3px;
+        background: none; cursor: pointer;
+      }
       .paneworks-sidebar .pw-handle { cursor: grab; opacity: .25; font-size: 10px; letter-spacing: -2px; }
       .paneworks-sidebar .pw-row:hover .pw-handle { opacity: .7; }
       .paneworks-sidebar .pw-row.dragging { opacity: .35; }
