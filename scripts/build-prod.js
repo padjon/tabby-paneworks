@@ -29,6 +29,9 @@ const prodPkg = {
   peerDependencies: pkg.peerDependencies,
   author: pkg.author,
   license: pkg.license,
+  repository: pkg.repository,
+  homepage: pkg.homepage,
+  bugs: pkg.bugs,
   tabbyPlugin: pkg.tabbyPlugin
 }
 
@@ -36,5 +39,10 @@ fs.writeFileSync(
   path.join(distDir, 'package.json'),
   JSON.stringify(prodPkg, null, 2)
 )
+
+// 4. README (shown on npm) and LICENSE (required by MIT) go into the published package
+for (const file of ['README.md', 'LICENSE']) {
+  fs.copyFileSync(path.join(rootDir, file), path.join(distDir, file))
+}
 
 console.log('Production build complete: dist/')

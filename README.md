@@ -10,26 +10,39 @@ Workspaces for [Tabby](https://tabby.sh): predefined split layouts where every p
 - **Reliable startup commands.** Panes are scanned when the split is ready, whenever a pane is added and again after a few seconds, and the command waits for the shell session; slow panes no longer miss their command.
 - Workspaces are stored under the same config key (`tabbyspaces`), so workspaces made with TabbySpaces keep working.
 
-## Build
+## Install
+
+In Tabby: Settings > Plugins, search **paneworks**, Install, restart Tabby. Updates appear in the same place.
+
+Only one of TabbySpaces and Paneworks may be installed: both read the same workspaces. Uninstall TabbySpaces first; your workspaces stay.
+
+## Develop
 
 ```
-npm install --legacy-peer-deps
+npm install
 npm run build
 ```
 
-The build writes `dist/` (plugin code plus its own `package.json`).
+`.npmrc` sets `legacy-peer-deps`, so npm doesn't pull Tabby's own packages. The build writes `dist/` (the published package: plugin code, its own `package.json`, README, LICENSE).
 
-## Install into Tabby (Windows)
-
-Only one of TabbySpaces and Paneworks may be installed: both read the same workspaces.
+To try a local build in Tabby, link it instead of the published version, then restart Tabby after each `npm run build`:
 
 ```
 cd %APPDATA%\tabby\plugins
-npm uninstall tabby-tabbyspaces
-npm install --legacy-peer-deps D:\tabby-paneworks\dist
+npm uninstall tabby-paneworks
+npm install --legacy-peer-deps <path to this repo>\dist
 ```
 
-`npm install <folder>` links the folder, so after `npm run build` a Tabby restart picks up the new version; no reinstall needed. `--legacy-peer-deps` keeps npm from pulling a second copy of Tabby's own packages into the plugins folder. Restart Tabby after installing.
+Back to the published version: `npm uninstall tabby-paneworks`, then install it from the plugin manager.
+
+## Release
+
+```
+npm version patch      # or minor / major: bumps package.json, commits, tags vX.Y.Z
+git push --follow-tags
+```
+
+The tag starts `.github/workflows/release.yml`: build, publish to npm (trusted publishing, no token), GitHub release. Every Tabby with Paneworks installed then offers the update in Settings > Plugins.
 
 ## Use
 

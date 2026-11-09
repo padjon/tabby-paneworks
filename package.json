@@ -4,7 +4,13 @@
   "description": "Workspaces for Tabby: predefined split layouts with startup commands; panes show their program title, the tab shows the workspace name (fork of TabbySpaces)",
   "keywords": [
     "tabby",
-    "tabby-plugin"
+    "tabby-plugin",
+    "workspace",
+    "workspaces",
+    "split",
+    "layout",
+    "panes",
+    "startup-command"
   ],
   "main": "dist/index.js",
   "type": "commonjs",
@@ -54,10 +60,17 @@
   },
   "author": "Patrick Schaefer (fork of TabbySpaces by Igor Halilovic)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/padjon/tabby-paneworks.git"
+  },
+  "homepage": "https://github.com/padjon/tabby-paneworks#readme",
+  "bugs": {
+    "url": "https://github.com/padjon/tabby-paneworks/issues"
+  },
   "tabbyPlugin": {
     "name": "paneworks",
     "displayName": "Paneworks",
     "description": "Workspaces for Tabby: predefined split layouts with startup commands; panes show their program title, the tab shows the workspace name (fork of TabbySpaces)"
-  },
-  "private": true
+  }
 }
