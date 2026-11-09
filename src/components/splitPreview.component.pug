@@ -34,7 +34,7 @@
         span.dim-value {{ getPaneGlobalHeight(i) }}
 
     //- Nested split
-    split-preview(
+    pw-split-preview(
       *ngIf='isSplit(child)',
       [split]='asSplit(child)',
       [depth]='depth + 1',

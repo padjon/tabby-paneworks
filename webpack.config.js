@@ -54,7 +54,7 @@ module.exports = (env = {}) => ({
   ],
   plugins: [
     new webpack.DefinePlugin({
-      __CONFIG_KEY__: JSON.stringify(env.dev ? 'tabbyspaces_dev' : 'tabbyspaces'),
+      __CONFIG_KEY__: JSON.stringify(env.dev ? 'paneworks_dev' : 'paneworks'),
       __DISPLAY_NAME__: JSON.stringify(env.dev ? 'Paneworks DEV' : 'Paneworks'),
       __IS_DEV__: env.dev ? 'true' : 'false',
     }),

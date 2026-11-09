@@ -21,7 +21,7 @@
 
   //- Tab content (editor)
   .tab-content(*ngIf='editingWorkspace')
-    workspace-editor(
+    pw-workspace-editor(
       [workspace]='editingWorkspace',
       [autoFocus]='isCreatingNew',
       [hasUnsavedChanges]='hasUnsavedChanges',

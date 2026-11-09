@@ -2,7 +2,7 @@ import { Component, Input, Output, EventEmitter, HostListener } from '@angular/c
 import { WorkspacePane, TabbyProfile } from '../models/workspace.model'
 
 @Component({
-  selector: 'pane-editor',
+  selector: 'pw-pane-editor',
   template: require('./paneEditor.component.pug'),
   styles: [require('./paneEditor.component.scss')],
 })

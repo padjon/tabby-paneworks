@@ -7,7 +7,7 @@ import {
 } from '../models/workspace.model'
 
 @Component({
-  selector: 'split-preview',
+  selector: 'pw-split-preview',
   template: require('./splitPreview.component.pug'),
   styles: [require('./splitPreview.component.scss')],
 })

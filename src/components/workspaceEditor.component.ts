@@ -20,7 +20,7 @@ interface TreeContext {
 import { WorkspaceEditorService } from '../services/workspaceEditor.service'
 
 @Component({
-  selector: 'workspace-editor',
+  selector: 'pw-workspace-editor',
   template: require('./workspaceEditor.component.pug'),
   styles: [require('./workspaceEditor.component.scss')],
 })

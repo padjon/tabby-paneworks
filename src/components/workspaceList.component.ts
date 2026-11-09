@@ -19,7 +19,7 @@ import {
 const SETTINGS_MAX_WIDTH = 'none'
 
 @Component({
-  selector: 'workspace-list',
+  selector: 'pw-workspace-list',
   template: require('./workspaceList.component.pug'),
   styles: [require('./workspaceList.component.scss')],
 })

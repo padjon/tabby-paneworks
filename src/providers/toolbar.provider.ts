@@ -24,7 +24,7 @@ import { countPanes, parsePaneMarker } from '../models/workspace.model'
 
 /** Recovery token structure for workspace tabs */
 interface RecoveryTokenWithWorkspace {
-  workspaceId?: string
+  paneworksWorkspaceId?: string
 }
 
 @Injectable()
@@ -83,7 +83,7 @@ export class WorkspaceToolbarProvider extends ToolbarButtonProvider {
   private getRecoveryWorkspaceId(tab: unknown): string | undefined {
     if (tab && typeof tab === 'object' && 'recoveryToken' in tab) {
       const token = (tab as { recoveryToken?: RecoveryTokenWithWorkspace }).recoveryToken
-      return token?.workspaceId
+      return token?.paneworksWorkspaceId
     }
     return undefined
   }
@@ -93,7 +93,7 @@ export class WorkspaceToolbarProvider extends ToolbarButtonProvider {
 
     for (const tab of this.app.tabs) {
       if (tab instanceof SplitTabComponent) {
-        // Strategy 1: Check recoveryToken.workspaceId (for restored tabs)
+        // Strategy 1: Check recoveryToken.paneworksWorkspaceId (for restored tabs)
         if (this.getRecoveryWorkspaceId(tab) === workspaceId) {
           return true
         }

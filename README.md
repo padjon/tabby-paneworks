@@ -8,13 +8,11 @@ Workspaces for [Tabby](https://tabby.sh): predefined split layouts where every p
 - **Pane label = program title.** Each pane's label shows the title the running program sets (for example Claude Code's session title), prefixed by the pane name when one is set: `C1 · <program title>`. Without a pane name the label is the program title alone. Renaming a pane by hand ("Rename pane") stops the sync for that pane.
 - **No internal ids on screen.** Panes are found through a hidden marker in their profile instead of a temporary pane title, so a pane can no longer get stuck showing its id.
 - **Reliable startup commands.** Panes are scanned when the split is ready, whenever a pane is added and again after a few seconds, and the command waits for the shell session; slow panes no longer miss their command.
-- Workspaces are stored under the same config key (`tabbyspaces`), so workspaces made with TabbySpaces keep working.
+- **Independent of TabbySpaces.** Both can be installed side by side: Paneworks keeps its workspaces under its own config key (`paneworks`), uses its own profile ids (`split-layout:paneworks:…`), tab state key (`paneworksWorkspaceId`), CSS hooks and component tags, and ignores TabbySpaces' tabs. Workspaces are not shared; create them in Settings > Paneworks.
 
 ## Install
 
 In Tabby: Settings > Plugins, search **paneworks**, Install, restart Tabby. Updates appear in the same place.
-
-Only one of TabbySpaces and Paneworks may be installed: both read the same workspaces. Uninstall TabbySpaces first; your workspaces stay.
 
 ## Develop
 

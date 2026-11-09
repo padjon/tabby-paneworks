@@ -67,9 +67,9 @@ export class WorkspaceBackgroundService {
   private extractWorkspaceId(tab: SplitTabComponent): string | undefined {
     const tabAny = tab as any
 
-    // Strategy 1: Check _recoveredState.workspaceId (for restored tabs)
-    if (tabAny._recoveredState?.workspaceId) {
-      return tabAny._recoveredState.workspaceId
+    // Strategy 1: Check _recoveredState.paneworksWorkspaceId (for restored tabs)
+    if (tabAny._recoveredState?.paneworksWorkspaceId) {
+      return tabAny._recoveredState.paneworksWorkspaceId
     }
 
     // Strategy 2: Extract from child pane markers / profile ID (for freshly opened tabs)
@@ -100,26 +100,26 @@ export class WorkspaceBackgroundService {
   }
 
   private markSplitTabElement(workspaceId: string): void {
-    // Find split-tab that doesn't have a workspace-id yet
-    const splitTabs = document.querySelectorAll('split-tab')
-    for (let i = splitTabs.length - 1; i >= 0; i--) {
-      const splitTab = splitTabs[i]
-      if (!splitTab.hasAttribute('data-workspace-id')) {
-        splitTab.setAttribute('data-workspace-id', workspaceId)
-        break
-      }
-    }
+    // Tabby doesn't expose a split tab's DOM element, so pick the element of the tab
+    // that was just opened: unmarked by us and by TabbySpaces (data-workspace-id),
+    // preferring the visible one (a newly opened tab is the active tab).
+    const candidates = Array.from(document.querySelectorAll('split-tab')).filter((el) =>
+      !el.hasAttribute('data-paneworks-workspace-id') && !el.hasAttribute('data-workspace-id')
+    )
+    const visible = candidates.filter((el) => (el as HTMLElement).offsetParent !== null)
+    const target = visible[visible.length - 1] ?? candidates[candidates.length - 1]
+    target?.setAttribute('data-paneworks-workspace-id', workspaceId)
   }
 
   private generateCSS(workspaceId: string, bg: WorkspaceBackground): string {
     if (bg.type === 'none' || !bg.value) return ''
 
     return `
-      split-tab[data-workspace-id="${workspaceId}"] {
+      split-tab[data-paneworks-workspace-id="${workspaceId}"] {
         background: ${bg.value} !important;
       }
-      split-tab[data-workspace-id="${workspaceId}"] .xterm-viewport,
-      split-tab[data-workspace-id="${workspaceId}"] .xterm-screen {
+      split-tab[data-paneworks-workspace-id="${workspaceId}"] .xterm-viewport,
+      split-tab[data-paneworks-workspace-id="${workspaceId}"] .xterm-screen {
         background: transparent !important;
       }
     `
@@ -128,7 +128,7 @@ export class WorkspaceBackgroundService {
   private injectCSS(workspaceId: string, css: string): void {
     if (!this.styleElement) {
       this.styleElement = document.createElement('style')
-      this.styleElement.id = 'tabbyspaces-backgrounds'
+      this.styleElement.id = 'paneworks-backgrounds'
       document.head.appendChild(this.styleElement)
     }
 

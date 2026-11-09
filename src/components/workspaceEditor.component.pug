@@ -131,7 +131,7 @@
 
     //- Split preview
     .layout-preview((click)='onPreviewBackgroundClick()')
-      split-preview(
+      pw-split-preview(
         [split]='workspace.root',
         [selectedPaneId]='selectedPaneId',
         [profiles]='profiles',
@@ -148,7 +148,7 @@
       )
 
     //- Inline pane editor
-    pane-editor(
+    pw-pane-editor(
       *ngIf='showPaneEditor && editingPane',
       [pane]='editingPane',
       [profiles]='profiles',

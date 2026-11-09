@@ -188,7 +188,7 @@ export class WorkspaceEditorService {
       type: 'app:split-tab',
       orientation: split.orientation === 'horizontal' ? 'h' : 'v',
       ratios: [...split.ratios],
-      workspaceId,
+      paneworksWorkspaceId: workspaceId,
       // The outer tab always shows the workspace name, never the pane titles
       tabTitle: workspaceName,
       disableDynamicTitle: true,
@@ -220,7 +220,7 @@ export class WorkspaceEditorService {
         savedState: false,
         tabTitle: pane.name || 'Shell',
         tabCustomTitle: initialLabel,
-        workspaceId,
+        paneworksWorkspaceId: workspaceId,
         disableDynamicTitle: false,
       }
     }
@@ -237,7 +237,7 @@ export class WorkspaceEditorService {
         savedState: false,
         tabTitle: pane.name || baseProfile.name,
         tabCustomTitle: initialLabel,
-        workspaceId,
+        paneworksWorkspaceId: workspaceId,
         disableDynamicTitle: false,
       }
     }
@@ -282,14 +282,14 @@ export class WorkspaceEditorService {
 
     // tabTitle: follows the program's title (dynamic titles stay on)
     // tabCustomTitle: the pane label; PaneRuntimeService keeps it in sync with the program title
-    // workspaceId: for duplicate detection after Tabby recovery
+    // paneworksWorkspaceId: for duplicate detection after Tabby recovery
     return {
       type: 'app:local-tab',
       profile,
       savedState: false,
       tabTitle: pane.name || baseProfile.name || 'Shell',
       tabCustomTitle: initialLabel,
-      workspaceId,
+      paneworksWorkspaceId: workspaceId,
       disableDynamicTitle: false,
       cwd: isWsl ? '' : rawCwd,
     }

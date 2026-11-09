@@ -2,7 +2,7 @@ import { Component, Input } from '@angular/core'
 import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap'
 
 @Component({
-  selector: 'delete-confirm-modal',
+  selector: 'pw-delete-confirm-modal',
   template: `
     <div class="modal-header">
       <h5 class="modal-title">Delete Workspace</h5>
