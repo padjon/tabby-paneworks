@@ -1,14 +1,20 @@
 name: Release
 
-# Push a tag vX.Y.Z (npm version patch|minor|major && git push --follow-tags)
-# -> build, publish tabby-paneworks@X.Y.Z to npm, create the GitHub release.
+# Every push to main publishes a new version to npm.
+# Version = <major>.<minor> from package.json + this workflow's run number as the patch,
+# e.g. package.json 1.0.0 -> 1.0.17. Bump major/minor in package.json by hand when you want to.
 on:
   push:
-    tags: ['v*']
+    branches: ['main']
+  workflow_dispatch:
 
 permissions:
-  contents: write   # create the GitHub release
+  contents: write   # push the vX.Y.Z tag
   id-token: write   # npm trusted publishing (OIDC), no npm token stored
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -21,13 +27,17 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Tag must match package.json version
+      # Trusted publishing needs npm >= 11.5.1
+      - run: npm install -g npm@latest
+
+      - name: Compute version
+        id: version
         run: |
-          version="$(node -p "require('./package.json').version")"
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match package.json version $version" >&2
-            exit 1
-          fi
+          base="$(node -p "require('./package.json').version")"
+          version="$(echo "$base" | cut -d. -f1-2).${GITHUB_RUN_NUMBER}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          npm version "$version" --no-git-tag-version --allow-same-version
+          echo "Publishing $version"
 
       - run: npm ci
       - run: npm run build
@@ -43,7 +53,10 @@ jobs:
             npm publish --provenance --access public
           fi
 
-      - name: GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes --title "$GITHUB_REF_NAME"
+      - name: Tag the commit
+        run: |
+          tag="v${{ steps.version.outputs.version }}"
+          if ! git ls-remote --exit-code --tags origin "$tag" >/dev/null; then
+            git tag "$tag"
+            git push origin "$tag"
+          fi
