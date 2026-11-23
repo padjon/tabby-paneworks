@@ -1420,6 +1420,9 @@ export class LayoutService {
         this.render(state, true)
         this.workspaces.openConfigInVsCode(workspace)
       }),
+      this.button('pw-menu-item', 'Copy settings file path', 'Copy the path of this workspace\'s JSON settings file; saves to it are applied right away', () => {
+        this.workspaces.copyConfigFilePath(workspace)
+      }),
     )
 
     // Other workspaces

@@ -4,7 +4,7 @@
 
 - Views: a workspace can have several views, each with its own set of switched-on panes. Select a view in the sidebar; the pane switches apply to the selected view. Views can be added, renamed, duplicated and deleted. Existing workspaces get one view, "Default", with their current switches.
 - Edit settings in VS Code (workspace menu): the workspace as a JSON file, applied on every save, kept in sync with the sidebar.
-- Copy button in the sidebar header: copies the project folder path.
+- Copy button in the sidebar header: copies the project folder path. Copy settings file path (workspace menu): copies the path of the workspace's JSON settings file.
 - New workspace asks for a profile, folder and startup command and creates 4 panes with them (number adjustable); the workspace is named after the folder, which becomes its project folder.
 - New workspaces no longer get a random tab colour; pick one in the workspace menu.
 - Duplicate in the pane editor: a copy of the pane right below it, switched on in the same views.

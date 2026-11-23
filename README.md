@@ -17,7 +17,7 @@ Made for running several long-lived sessions side by side (coding agents, dev se
 - **Label colours** per pane, so you recognise panes at a glance.
 - **Open in VS Code** from the sidebar header: opens the workspace's project folder (set in the workspace menu; by default the first pane folder). WSL folders open in VS Code's WSL mode.
 - **Copy the project folder path** from the sidebar header.
-- **Edit a workspace's settings in VS Code** as a JSON file (workspace menu). Every save is checked and applied right away.
+- **Edit a workspace's settings in VS Code** as a JSON file (workspace menu). Every save is checked and applied right away. **Copy settings file path** (same menu) copies the file's path, for editing it with any editor.
 - **Duplicate a pane** from its editor: same settings, switched on in the same views.
 - **Tab colour** per workspace, applied to the workspace tab every time it opens, also after a Tabby restart.
 - **NEW marker** on hidden panes that printed something since you last looked.
@@ -47,7 +47,7 @@ When a workspace opens, you briefly see all of its panes: Tabby starts a termina
 | Element | What it does |
 |---|---|
 | Workspace name (top) | Workspace menu: rename, tab colour, project folder, minimum pane size, open when Tabby starts, switch to or open another workspace, new workspace, delete this one |
-| Copy icon | Copy the project folder path to the clipboard |
+| Copy icon | Copy the project folder path to the clipboard (the settings file path is in the workspace menu) |
 | `</>` | Open the project folder in VS Code (needs the `code` command, which VS Code's installer puts on PATH) |
 | « / » | Collapse or expand the sidebar |
 | **Views** **+** | Add a view, with all panes switched on |

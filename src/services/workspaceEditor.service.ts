@@ -428,6 +428,17 @@ export class WorkspaceEditorService {
     this.spawnCode('code', [file])
   }
 
+  /**
+   * Copies the path of the workspace's settings file (written with the current settings
+   * and watched, so saves from any editor are applied, as with openConfigInVsCode).
+   */
+  copyConfigFilePath(workspace: Workspace): void {
+    const file = this.writeConfigFile(workspace, true)
+    if (!file) return
+    this.platform.setClipboard({ text: file })
+    this.notifications.info(`Copied ${file}`)
+  }
+
   private configFilePath(workspace: Workspace): string {
     const configPath = this.platform.getConfigPath()
     const dir = path.join(configPath ? path.dirname(configPath) : os.tmpdir(), 'paneworks')
