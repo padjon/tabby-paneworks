@@ -62,7 +62,7 @@ export interface WorkspacePane {
   profileId: string
   cwd?: string
   startupCommand?: string
-  /** Switched off in the sidebar: not part of "View all" (still reachable by focus view). */
+  /** Legacy (before views): switched off. Moved into the default view by normalizeWorkspace. */
   hidden?: boolean
   /** Background of the pane label (CSS colour, e.g. #3b82f6); none = Tabby's default. */
   color?: string
@@ -78,6 +78,14 @@ export function readableTextColor(background: string): string {
   return luminance > 0.4 ? '#000' : '#fff'
 }
 
+/** A named selection of panes: its switched-on panes are shown in a grid. */
+export interface WorkspaceView {
+  id: string
+  name: string
+  /** Panes switched off in this view (still running, reachable by focus view). */
+  hidden?: string[]
+}
+
 export interface Workspace {
   id: string
   name: string
@@ -85,6 +93,10 @@ export interface Workspace {
   color?: string
   /** All panes, in sidebar and grid order. */
   panes: WorkspacePane[]
+  /** Views; each decides which panes it shows. At least one (normalizeWorkspace). */
+  views: WorkspaceView[]
+  /** The selected view; none or unknown = the first. */
+  activeViewId?: string
   /** Smallest pane size in px; decides how many panes fit and in how many rows. */
   minPaneWidth?: number
   minPaneHeight?: number
@@ -157,12 +169,64 @@ export function gridTree(paneIds: string[], rows: number[]): LayoutSplit {
   return { orientation: 'vertical', ratios: rowNodes.map(() => 1 / rowNodes.length), children: rowNodes }
 }
 
-/** Makes sure a stored workspace has a pane list (e.g. one edited by hand in config.yaml). */
+/** Makes sure a stored workspace has a pane list and at least one view (e.g. one edited by hand in config.yaml, or saved before views existed). */
 export function normalizeWorkspace(workspace: Workspace): Workspace {
   if (!Array.isArray(workspace.panes)) {
     workspace.panes = []
   }
+  // Hand-edited: stray empty entries
+  workspace.panes = workspace.panes.filter((p) => p && typeof p === 'object')
+  if (Array.isArray(workspace.views)) {
+    workspace.views = workspace.views.filter((v) => v && typeof v === 'object')
+    for (const view of workspace.views) {
+      // Hand-edited: a single id instead of a list
+      const hidden: unknown = view.hidden
+      if (typeof hidden === 'string') view.hidden = [hidden]
+      else if (hidden !== undefined && !Array.isArray(hidden)) delete view.hidden
+    }
+  }
+  if (Array.isArray(workspace.views) && workspace.views.length) {
+    // Old per-pane switches next to existing views (e.g. a merged config): into the first view
+    const legacy = workspace.panes.filter((p) => p.hidden).map((p) => p.id)
+    const first = workspace.views[0]
+    if (legacy.length) {
+      const hidden = Array.isArray(first.hidden) ? first.hidden : []
+      first.hidden = [...hidden, ...legacy.filter((id) => !hidden.includes(id))]
+    }
+  }
+  if (!Array.isArray(workspace.views) || !workspace.views.length) {
+    // Before views: one view, switched off by the panes' own `hidden` flag
+    const hidden = workspace.panes.filter((p) => p.hidden).map((p) => p.id)
+    // A stable id (from the workspace's), so an unsaved migration gives the same view every time
+    workspace.views = [{ id: `${workspace.id}-default`, name: 'Default', ...(hidden.length ? { hidden } : {}) }]
+  }
+  for (const pane of workspace.panes) {
+    if ('hidden' in pane) delete pane.hidden
+  }
   return workspace
+}
+
+/** The selected view of a workspace (the first if none is selected). */
+export function activeView(workspace: Workspace): WorkspaceView {
+  return workspace.views.find((v) => v.id === workspace.activeViewId) ?? workspace.views[0]
+}
+
+/** Whether a pane is switched on in a view. */
+export function isPaneOn(view: WorkspaceView, paneId: string): boolean {
+  return !view.hidden?.includes(paneId)
+}
+
+/** Switches a pane on or off in a view (the config file never gets an empty list). */
+export function setPaneOn(view: WorkspaceView, paneId: string, on: boolean): void {
+  const hidden = (view.hidden ?? []).filter((id) => id !== paneId)
+  if (!on) hidden.push(paneId)
+  if (hidden.length) view.hidden = hidden
+  else delete view.hidden
+}
+
+/** A view with every pane switched on. */
+export function createDefaultView(name: string = 'Default'): WorkspaceView {
+  return { id: generateUUID(), name }
 }
 
 /**
@@ -254,8 +318,8 @@ export function createDefaultWorkspace(name: string = ''): Workspace {
     id: generateUUID(),
     name,
     icon: getRandomIcon(),
-    color: getRandomColor(),
     panes: [createDefaultPane(), createDefaultPane()],
+    views: [createDefaultView()],
     launchOnStartup: false,
   }
 }

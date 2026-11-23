@@ -91,7 +91,7 @@ export class WorkspaceToolbarProvider extends ToolbarButtonProvider {
     }))
     options.push({
       name: 'New workspace',
-      description: 'Create a workspace with one pane; set it up in its sidebar',
+      description: 'Pick a profile, folder, command and number of panes (default 4)',
       icon: 'plus',
       color: undefined,
       result: NEW_WORKSPACE,

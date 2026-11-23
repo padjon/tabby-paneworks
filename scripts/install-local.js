@@ -65,6 +65,11 @@ function installLocal(distDir, packageName) {
       try {
         // Symlinked install (npm link): it already is the build
         if (fs.realpathSync(target) === fs.realpathSync(distDir)) continue
+        // Only ever overwrite a build, never a source folder (e.g. a file: install of the repo root)
+        if (fs.existsSync(path.join(target, 'src')) || fs.existsSync(path.join(target, '.git'))) {
+          console.warn(`Skipped ${target}: looks like a source folder, not a build`)
+          continue
+        }
         // Overwrite in place (no delete first), so a failure never leaves Tabby without the plugin
         fs.cpSync(distDir, target, { recursive: true, force: true })
         console.log(`Local Tabby updated: ${target}`)

@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core'
 import {
   AppService,
   BaseTabComponent,
+  PlatformService,
   ProfilesService,
   SplitContainer,
   SplitTabComponent,
@@ -16,12 +17,17 @@ import {
   TabbyProfile,
   Workspace,
   WorkspacePane,
+  WorkspaceView,
+  activeView,
   createDefaultPane,
+  createDefaultView,
   createDefaultWorkspace,
   isLayoutSplit,
+  isPaneOn,
   layoutPaneIds,
   parsePaneMarker,
   readableTextColor,
+  setPaneOn,
 } from '../models/workspace.model'
 import { PaneRuntimeService } from './paneRuntime.service'
 import { SIDEBAR_WIDTH, WorkspaceEditorService } from './workspaceEditor.service'
@@ -34,11 +40,16 @@ const ICON_CODE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" s
   <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
 </svg>`
 
+/** "Copy project folder path" button: two sheets. */
+const ICON_COPY = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+</svg>`
+
 const SIDEBAR_COLLAPSED_WIDTH = 22
 const REFRESH_MS = 1000
 const RESIZE_DEBOUNCE_MS = 250
 
-/** What a workspace tab shows: all switched-on panes in a grid, or one pane. */
+/** What a workspace tab shows: the selected view's switched-on panes in a grid, or one pane. */
 type View = { kind: 'all' } | { kind: 'focus', paneId: string }
 
 interface WorkspaceTabState {
@@ -55,6 +66,7 @@ interface WorkspaceTabState {
   dragging: boolean
   /** Open editors pause the periodic redraw (it would reset what is being typed). */
   editingPaneId: string | null
+  editingViewId: string | null
   menuOpen: boolean
   timer: ReturnType<typeof setInterval> | null
   /** "NEW": panes with output since they left the screen (after the grace period). */
@@ -63,6 +75,16 @@ interface WorkspaceTabState {
   leftAt: Map<string, number>
   /** Starting all panes after the tab opened; the grid waits until that is done. */
   starting: boolean
+  /** The workspace file was edited while the tab was in the background: sync when it is shown. */
+  syncPending: boolean
+  /** Panes whose command, folder or profile changed in the file: restarted at the next sync. */
+  restartPending: Set<string>
+  /** Unsaved values of the open editor (pane, view or workspace menu), kept across redraws. */
+  drafts: Map<string, string>
+  /** Which editor the drafts belong to; another editor opening starts over. */
+  draftOwner: string | null
+  /** Tab colour this plugin last applied; a colour picked in Tabby's tab menu is kept otherwise. */
+  appliedColor: string | null
 }
 
 /** How long opening waits for every pane's shell before switching to "View all". */
@@ -79,6 +101,13 @@ const NEW_OUTPUT_GRACE_MS = 2500
 // split.maximizedTab, split.visibility$, tab.hostView (the top-level tab's DOM).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any
+
+/** Last part of a folder path, Windows or POSIX: 'C:\\code\\api\\' -> 'api'; '' for none. */
+function folderName(folder: string): string {
+  const parts = folder.trim().split(/[\\/]+/).filter(Boolean)
+  const last = parts[parts.length - 1] ?? ''
+  return /^[a-z]:$/i.test(last) || last === '~' ? '' : last
+}
 
 /**
  * Everything inside a Paneworks workspace tab: the sidebar (workspace menu, panes,
@@ -102,9 +131,11 @@ export class LayoutService {
     private runtime: PaneRuntimeService,
     private workspaces: WorkspaceEditorService,
     private tabsService: TabsService,
-    private tabRecovery: TabRecoveryService
+    private tabRecovery: TabRecoveryService,
+    private platform: PlatformService
   ) {
     this.runtime.workspaceSplitFound$.subscribe(({ split, workspaceId }) => this.attach(split, workspaceId))
+    this.workspaces.workspaceEdited$.subscribe(({ workspaceId, before }) => this.syncEdited(workspaceId, before))
     window.addEventListener('resize', () => {
       if (this.resizeTimer) clearTimeout(this.resizeTimer)
       this.resizeTimer = setTimeout(() => this.refreshAllGrids(), RESIZE_DEBOUNCE_MS)
@@ -143,17 +174,122 @@ export class LayoutService {
     if (profile) this.profilesService.openNewTabForProfile(profile as Any)
   }
 
-  /** New workspace with one pane (profile of the first local shell); opened right away. */
+  /**
+   * New workspace: asks for a profile, a folder and a startup command (the initial setup),
+   * then creates that many identical panes (4 by default). The workspace is named after
+   * the folder, which also becomes its project folder. Opened right away.
+   */
   async createWorkspace(): Promise<void> {
     await this.loadProfiles()
-    const existing = new Set(this.workspaces.getWorkspaces().map((w) => w.name))
-    let n = 1
-    while (existing.has(`Workspace ${n}`)) n++
-    const workspace = createDefaultWorkspace(`Workspace ${n}`)
-    const local = this.profiles.find((p) => p.type === 'local' || p.type?.startsWith('local:')) ?? this.profiles[0]
-    workspace.panes = [{ ...createDefaultPane(), profileId: local?.id ?? '' }]
+    const setup = await this.askWorkspaceSetup()
+    if (!setup) return
+    const names = new Set(this.workspaces.getWorkspaces().map((w) => w.name))
+    let base = folderName(setup.folder)
+    if (!base) {
+      let n = 1
+      while (names.has(`Workspace ${n}`)) n++
+      base = `Workspace ${n}`
+    }
+    let name = base
+    for (let n = 2; names.has(name); n++) name = `${base} ${n}`
+    const workspace = createDefaultWorkspace(name)
+    // Optional fields only when set (the config file never gets empty keys)
+    workspace.panes = Array.from({ length: setup.panes }, () => ({
+      id: createDefaultPane().id,
+      profileId: setup.profileId,
+      ...(setup.folder ? { cwd: setup.folder } : {}),
+      ...(setup.command ? { startupCommand: setup.command } : {}),
+    }))
+    if (setup.folder) workspace.folder = setup.folder
     await this.workspaces.addWorkspace(workspace)
     await this.openWorkspace(workspace.id)
+  }
+
+  /** The "New workspace" dialog. Resolves to null when cancelled. */
+  private askWorkspaceSetup(): Promise<{ profileId: string, folder: string, command: string, panes: number } | null> {
+    this.ensureStyles()
+    return new Promise((resolve) => {
+      const overlay = this.node('div', 'paneworks-overlay')
+      const box = this.node('div', 'paneworks-sidebar pw-dialog')
+      const form = this.node('div', 'pw-form')
+
+      const profile = document.createElement('select')
+      profile.className = 'pw-input'
+      for (const p of this.profiles) {
+        const option = document.createElement('option')
+        option.value = p.id
+        option.textContent = p.name
+        profile.append(option)
+      }
+      const local = this.profiles.find((p) => p.type === 'local' || p.type?.startsWith('local:')) ?? this.profiles[0]
+      profile.value = local?.id ?? ''
+
+      const folder = this.input('text', '', 'C:\\path or /home/user')
+      const browse = this.button('pw-btn', 'Browse…', 'Pick a folder', async () => {
+        try {
+          const picked = await this.platform.pickDirectory()
+          if (picked) folder.value = picked
+          updateName()
+        } catch {
+          // dialog not available: type the path
+        }
+      })
+      const folderRow = this.node('div', 'pw-folder-row')
+      folderRow.append(folder, browse)
+      const command = this.input('text', '', 'e.g. claude (optional)')
+      const panes = this.input('number', '4', '4')
+      panes.min = '1'
+      panes.max = '16'
+      panes.classList.add('pw-size')
+      const nameHint = this.node('div', 'pw-hint')
+      const updateName = () => {
+        const name = folderName(folder.value)
+        nameHint.textContent = name ? `Workspace name: ${name}` : 'The workspace is named after the folder.'
+      }
+      folder.addEventListener('input', updateName)
+      updateName()
+
+      form.append(
+        this.node('div', 'pw-dialog-title', 'New workspace'),
+        this.field('Profile', profile),
+        this.field('Folder', folderRow),
+        nameHint,
+        this.field('Startup command', command),
+        this.field('Panes', panes),
+        this.node('div', 'pw-hint', 'Every pane starts with this profile, folder and command. Change single panes later in the sidebar.'),
+      )
+      const close = (result: { profileId: string, folder: string, command: string, panes: number } | null) => {
+        overlay.remove()
+        resolve(result)
+      }
+      const create = () => close({
+        profileId: profile.value,
+        folder: folder.value.trim(),
+        command: command.value.trim(),
+        panes: Math.min(16, Math.max(1, Math.round(panes.value.trim() && Number.isFinite(Number(panes.value)) ? Number(panes.value) : 4))),
+      })
+      for (const field of [folder, command, panes]) {
+        field.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') create()
+          if (e.key === 'Escape') close(null)
+        })
+      }
+      profile.addEventListener('keydown', (e) => {
+        e.stopPropagation()
+        if (e.key === 'Escape') close(null)
+      })
+      const actions = this.node('div', 'pw-actions')
+      actions.append(
+        this.button('pw-btn primary', 'Create', 'Create and open the workspace', create),
+        this.button('pw-btn', 'Cancel', 'Close without creating', () => close(null)),
+      )
+      form.append(actions)
+      box.append(form)
+      overlay.append(box)
+      overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(null) })
+      document.body.append(overlay)
+      setTimeout(() => folder.focus(), 0)
+    })
   }
 
   private async loadProfiles(): Promise<void> {
@@ -170,8 +306,10 @@ export class LayoutService {
    * leaves the tab alone, so a colour set from Tabby's tab menu stays until the next restart.
    */
   private applyTabColor(state: WorkspaceTabState): void {
-    const color = this.workspaces.getWorkspace(state.workspaceId)?.color
+    const color = this.workspaces.getWorkspace(state.workspaceId)?.color || null
     if (color) state.split.color = color
+    else if (state.appliedColor) state.split.color = null // removed in the workspace menu or file
+    state.appliedColor = color
   }
 
   private attach(split: SplitTabComponent, workspaceId: string): void {
@@ -191,10 +329,16 @@ export class LayoutService {
       busy: false,
       dragging: false,
       editingPaneId: null,
+      editingViewId: null,
       menuOpen: false,
       timer: null,
       unseen: new Set(),
       starting: true,
+      syncPending: false,
+      restartPending: new Set(),
+      drafts: new Map(),
+      draftOwner: null,
+      appliedColor: null,
       leftAt: new Map(),
     }
     this.states.set(split, state)
@@ -212,7 +356,11 @@ export class LayoutService {
     })
     // A tab in the background has no size; fit its grid when it comes to the front
     ;(split as Any).visibility$?.subscribe((visible: boolean) => {
-      if (visible) setTimeout(() => this.refreshGrid(state), 50)
+      if (!visible) return
+      setTimeout(() => {
+        if (state.syncPending) this.syncTab(state)
+        else this.refreshGrid(state)
+      }, 50)
     })
 
     this.mountSidebar(state)
@@ -233,6 +381,14 @@ export class LayoutService {
     }
     const wasAll = state.view.kind === 'all'
     state.view = { kind: 'all' }
+    if (!plan.tree && workspace.panes.length && (force || !wasAll || state.appliedPlan !== 'empty')) {
+      // Nothing switched on in this view: show the first pane (the split can't be empty);
+      // the sidebar says so
+      const first = workspace.panes[0].id
+      if (await this.apply(state, workspace, { orientation: 'horizontal', ratios: [1], children: [{ paneId: first }] })) {
+        state.appliedPlan = 'empty'
+      }
+    }
     if (plan.tree && (force || !wasAll || signature !== state.appliedPlan)) {
       if (await this.apply(state, workspace, plan.tree)) {
         state.appliedPlan = signature
@@ -444,11 +600,88 @@ export class LayoutService {
     const workspace = this.workspaces.getWorkspace(state.workspaceId)
     const pane = workspace?.panes.find((p) => p.id === paneId)
     if (!workspace || !pane) return
-    if (pane.hidden) delete pane.hidden
-    else pane.hidden = true
+    const view = activeView(workspace)
+    setPaneOn(view, paneId, !isPaneOn(view, paneId))
     await this.workspaces.saveWorkspaceQuietly(workspace)
     if (state.view.kind === 'all') await this.showAll(state)
     else this.render(state, true)
+  }
+
+  /** Copy of a pane right after it, switched on in the same views; starts and opens its editor. */
+  private async duplicatePane(state: WorkspaceTabState, paneId: string): Promise<void> {
+    const workspace = this.workspaces.getWorkspace(state.workspaceId)
+    const source = workspace?.panes.find((p) => p.id === paneId)
+    if (!workspace || !source) return
+    const pane: WorkspacePane = { ...source, id: createDefaultPane().id }
+    if (source.name) pane.name = `${source.name} copy`
+    workspace.panes.splice(workspace.panes.indexOf(source) + 1, 0, pane)
+    for (const view of workspace.views) setPaneOn(view, pane.id, isPaneOn(view, source.id))
+    await this.workspaces.saveWorkspaceQuietly(workspace)
+    state.editingPaneId = pane.id
+    state.editingViewId = null
+    this.render(state, true)
+    await this.startAllPanes(state)
+  }
+
+  /**
+   * The workspace's config file was edited and applied: bring its open tab in line
+   * (title, colour, view), close panes that were removed and start new ones.
+   */
+  private async syncEdited(workspaceId: string, before: Workspace): Promise<void> {
+    const workspace = this.workspaces.getWorkspace(workspaceId)
+    const old = new Map(before.panes.map((p) => [p.id, p]))
+    const changed = (workspace?.panes ?? []).filter((p) => {
+      const o = old.get(p.id)
+      if (!o) return false
+      return (o.startupCommand ?? '') !== (p.startupCommand ?? '') || (o.cwd ?? '') !== (p.cwd ?? '') || o.profileId !== p.profileId
+    }).map((p) => p.id)
+    for (const state of [...this.active]) {
+      if (state.workspaceId !== workspaceId) continue
+      for (const id of changed) state.restartPending.add(id)
+      await this.syncTab(state)
+    }
+  }
+
+  private async syncTab(state: WorkspaceTabState): Promise<void> {
+    // A layout change in progress would make this one a no-op: wait for it
+    await this.waitFor(() => !state.busy && !state.starting, START_TIMEOUT_MS + 2000)
+    const workspace = this.workspaces.getWorkspace(state.workspaceId)
+    if (!workspace) return
+    // In the background the grid can't be measured: sync when the tab is shown
+    if (!this.paneArea(state)) {
+      state.syncPending = true
+      state.split.setTitle(workspace.name)
+      this.applyTabColor(state)
+      return
+    }
+    state.syncPending = false
+    state.split.setTitle(workspace.name)
+    this.applyTabColor(state)
+    const ids = new Set(workspace.panes.map((p) => p.id))
+    if (state.editingPaneId && !ids.has(state.editingPaneId)) state.editingPaneId = null
+    if (state.editingViewId && !workspace.views.some((v) => v.id === state.editingViewId)) state.editingViewId = null
+    if (state.view.kind === 'focus' && !ids.has(state.view.paneId)) state.view = { kind: 'all' }
+    await this.reapplyView(state)
+    const removed = () => [...this.livePanes(state)].filter(([id]) => !ids.has(id))
+    const view = state.view
+    if (removed().some(([, tab]) => tab.parent === state.split)) {
+      // The view couldn't be shown without them: show the first pane, so the split never runs empty
+      await this.showFocus(state, workspace.panes[0].id)
+    }
+    for (const [id, tab] of removed()) {
+      if (tab.parent === state.split) continue
+      state.parked.delete(id)
+      tab.destroy()
+    }
+    // Back to the view from before the fallback
+    if (view.kind === 'all' && state.view.kind === 'focus') await this.showAll(state, true)
+    // Changed command, folder or profile: restart those panes, as the pane editor's Restart does
+    for (const id of [...state.restartPending]) {
+      state.restartPending.delete(id)
+      if (ids.has(id) && this.livePanes(state).has(id)) await this.restartPane(state, id)
+    }
+    this.render(state, true)
+    if (workspace.panes.some((p) => !this.livePanes(state).has(p.id))) await this.startAllPanes(state)
   }
 
   private async movePane(state: WorkspaceTabState, paneId: string, beforePaneId: string | null): Promise<void> {
@@ -475,8 +708,14 @@ export class LayoutService {
       cwd: last?.cwd || '',
     }
     workspace.panes.push(pane)
+    // A new pane is switched on in the selected view only
+    const current = activeView(workspace)
+    for (const view of workspace.views) {
+      if (view !== current) setPaneOn(view, pane.id, false)
+    }
     await this.workspaces.saveWorkspaceQuietly(workspace)
     state.editingPaneId = pane.id
+    state.editingViewId = null
     state.menuOpen = false
     this.render(state, true)
   }
@@ -537,6 +776,7 @@ export class LayoutService {
     if (!window.confirm(`Remove "${label}" from ${workspace.name}? Its terminal is closed.`)) return
 
     workspace.panes = workspace.panes.filter((p) => p.id !== paneId)
+    for (const view of workspace.views) setPaneOn(view, paneId, true)
     await this.workspaces.saveWorkspaceQuietly(workspace)
     state.editingPaneId = null
 
@@ -551,7 +791,7 @@ export class LayoutService {
     if (still && still.parent === state.split && state.split.getAllTabs().length <= 1) {
       // Nothing else can be shown: switch another pane on and show it
       const other = workspace.panes[0]
-      delete other.hidden
+      setPaneOn(activeView(workspace), other.id, true)
       await this.workspaces.saveWorkspaceQuietly(workspace)
       await this.showFocus(state, other.id)
     }
@@ -559,6 +799,77 @@ export class LayoutService {
     this.livePanes(state).get(paneId)?.destroy()
     tab?.destroy()
     this.render(state, true)
+  }
+
+  // ---------- views ----------
+
+  /** Selects a view (saved with the workspace) and shows its grid. */
+  private async selectView(state: WorkspaceTabState, viewId: string): Promise<void> {
+    const workspace = this.workspaces.getWorkspace(state.workspaceId)
+    if (!workspace || !workspace.views.some((v) => v.id === viewId)) return
+    if (workspace.activeViewId !== viewId) {
+      workspace.activeViewId = viewId
+      await this.workspaces.saveWorkspaceQuietly(workspace)
+    }
+    await this.showAll(state, true)
+  }
+
+  /** New view with every pane switched on; selected and opened for naming. */
+  private async addView(state: WorkspaceTabState): Promise<void> {
+    const workspace = this.workspaces.getWorkspace(state.workspaceId)
+    if (!workspace) return
+    const names = new Set(workspace.views.map((v) => v.name))
+    let n = workspace.views.length + 1
+    while (names.has(`View ${n}`)) n++
+    const view = createDefaultView(`View ${n}`)
+    workspace.views.push(view)
+    workspace.activeViewId = view.id
+    await this.workspaces.saveWorkspaceQuietly(workspace)
+    state.editingViewId = view.id
+    state.editingPaneId = null
+    state.menuOpen = false
+    await this.showAll(state, true)
+  }
+
+  private async renameView(state: WorkspaceTabState, viewId: string, name: string): Promise<void> {
+    const workspace = this.workspaces.getWorkspace(state.workspaceId)
+    const view = workspace?.views.find((v) => v.id === viewId)
+    if (!workspace || !view) return
+    view.name = name.trim() || view.name
+    await this.workspaces.saveWorkspaceQuietly(workspace)
+    state.editingViewId = null
+    this.render(state, true)
+  }
+
+  /** Copy of a view (same switches), selected and opened for naming. */
+  private async duplicateView(state: WorkspaceTabState, viewId: string): Promise<void> {
+    const workspace = this.workspaces.getWorkspace(state.workspaceId)
+    const source = workspace?.views.find((v) => v.id === viewId)
+    if (!workspace || !source) return
+    const view: WorkspaceView = { ...createDefaultView(`${source.name} copy`), ...(source.hidden?.length ? { hidden: [...source.hidden] } : {}) }
+    workspace.views.splice(workspace.views.indexOf(source) + 1, 0, view)
+    workspace.activeViewId = view.id
+    await this.workspaces.saveWorkspaceQuietly(workspace)
+    state.editingViewId = view.id
+    await this.showAll(state, true)
+  }
+
+  private async deleteView(state: WorkspaceTabState, viewId: string): Promise<void> {
+    const workspace = this.workspaces.getWorkspace(state.workspaceId)
+    const view = workspace?.views.find((v) => v.id === viewId)
+    if (!workspace || !view) return
+    if (workspace.views.length <= 1) {
+      window.alert('A workspace needs at least one view.')
+      return
+    }
+    if (!window.confirm(`Delete the view "${view.name}"? Its panes keep running.`)) return
+    const wasActive = activeView(workspace) === view
+    workspace.views = workspace.views.filter((v) => v !== view)
+    if (wasActive) workspace.activeViewId = workspace.views[0].id
+    await this.workspaces.saveWorkspaceQuietly(workspace)
+    state.editingViewId = null
+    if (wasActive && state.view.kind === 'all') await this.showAll(state, true)
+    else this.render(state, true)
   }
 
   // ---------- workspace changes from the sidebar ----------
@@ -583,8 +894,7 @@ export class LayoutService {
     else delete workspace.folder
     await this.workspaces.saveWorkspaceQuietly(workspace)
     state.split.setTitle(workspace.name)
-    // No colour: clear it, so a colour removed here doesn't stay on the tab
-    state.split.color = workspace.color || null
+    this.applyTabColor(state)
     state.menuOpen = false
     if (state.view.kind === 'all') await this.showAll(state)
     else this.render(state, true)
@@ -687,14 +997,14 @@ export class LayoutService {
     if (!el || !el.isConnected || state.dragging) return
     this.watchOutput(state)
     this.applyLabelColors(state, this.workspaces.getWorkspace(state.workspaceId))
-    if (!force && (state.editingPaneId || state.menuOpen)) return
+    if (!force && (state.editingPaneId || state.editingViewId || state.menuOpen)) return
     const workspace = this.workspaces.getWorkspace(state.workspaceId)
     const live = this.livePanes(state)
     const onScreen = new Set(state.split.getAllTabs().map((t) => this.paneIdOf(t)))
 
     // Redraw only on change: a redraw between mousedown and mouseup would swallow the click
     const signature = JSON.stringify([
-      state.collapsed, state.view, state.editingPaneId, state.menuOpen, workspace,
+      state.collapsed, state.view, state.editingPaneId, state.editingViewId, state.menuOpen, workspace,
       workspace?.panes.map((p) => {
         const tab = live.get(p.id)
         return [tab?.customTitle, tab?.title, state.unseen.has(p.id), onScreen.has(p.id)]
@@ -702,6 +1012,19 @@ export class LayoutService {
     ])
     if (!force && (el as Any).__pwSignature === signature) return
     ;(el as Any).__pwSignature = signature
+
+    // Open editors are rebuilt below: keep what was typed and where the cursor was
+    const owner = state.editingPaneId ? `p:${state.editingPaneId}` : state.editingViewId ? `v:${state.editingViewId}`
+      : state.menuOpen ? 'm' : null
+    const opened = owner !== state.draftOwner
+    if (opened) {
+      state.drafts.clear()
+      state.draftOwner = owner
+    }
+    const active = document.activeElement as HTMLInputElement | null
+    const focusKey = active && el.contains(active) ? active.dataset?.draft ?? null : null
+    const selection = focusKey && typeof active!.selectionStart === 'number' ? [active!.selectionStart, active!.selectionEnd] : null
+    this.autofocus = opened
 
     el.classList.toggle('collapsed', state.collapsed)
     el.style.flex = `0 0 ${state.collapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH}px`
@@ -724,6 +1047,7 @@ export class LayoutService {
     const wsButton = this.button('pw-ws', '', 'Workspace menu', () => {
       state.menuOpen = !state.menuOpen
       state.editingPaneId = null
+      state.editingViewId = null
       this.render(state, true)
     })
     wsButton.append(this.node('span', 'pw-ws-name', workspace.name), this.node('span', 'pw-caret', state.menuOpen ? '▴' : '▾'))
@@ -732,26 +1056,34 @@ export class LayoutService {
       folder ? `Open ${folder.path} in VS Code` : 'Open in VS Code (no project folder yet: set one in the workspace menu)',
       () => this.workspaces.openInVsCode(workspace))
     code.innerHTML = ICON_CODE
-    header.append(wsButton, code, toggle)
+    const copy = this.button('pw-icon-btn pw-code', '',
+      folder ? `Copy ${folder.path}` : 'Copy the project folder path (no project folder yet: set one in the workspace menu)',
+      () => this.workspaces.copyProjectFolder(workspace))
+    copy.innerHTML = ICON_COPY
+    header.append(wsButton, copy, code, toggle)
     el.append(header)
     if (state.menuOpen) el.append(this.workspaceMenu(state, workspace))
 
-    // View all
-    const enabled = workspace.panes.filter((p) => !p.hidden)
-    const shownCount = enabled.filter((p) => onScreen.has(p.id)).length
-    const allRow = this.node('div', 'pw-row pw-all' + (state.view.kind === 'all' ? ' active' : ''))
-    allRow.append(
-      this.node('span', 'pw-main', 'View all'),
-      this.node('span', 'pw-count', state.view.kind === 'all' ? `${shownCount} / ${enabled.length}` : `${enabled.length} on`)
+    // Views: click one to show its switched-on panes in a grid
+    const current = activeView(workspace)
+    const views = this.node('div', 'pw-section')
+    views.append(
+      this.node('span', '', 'Views'),
+      this.button('pw-icon-btn pw-add', '+', 'Add a view (all panes on)', () => this.addView(state))
     )
-    allRow.title = 'Show all switched-on panes in a grid'
-    allRow.onclick = () => this.showAll(state, true)
-    el.append(allRow)
+    el.append(views)
+    for (const view of workspace.views) {
+      el.append(this.viewRow(state, workspace, view, view === current, onScreen))
+      if (state.editingViewId === view.id) el.append(this.viewEditor(state, workspace, view))
+    }
+    if (!workspace.panes.some((p) => isPaneOn(current, p.id))) {
+      el.append(this.node('div', 'pw-hint pw-empty-view', `Nothing is switched on in "${current.name}": switch panes on below.`))
+    }
 
-    // Panes
+    // Panes; the switches belong to the selected view
     const section = this.node('div', 'pw-section')
     section.append(
-      this.node('span', '', 'Panes'),
+      this.node('span', 'pw-section-title', `Panes · ${current.name}`),
       this.button('pw-icon-btn pw-add', '+', 'Add a pane', () => this.addPane(state))
     )
     el.append(section)
@@ -759,13 +1091,44 @@ export class LayoutService {
     const focused = state.view.kind === 'focus' ? state.view.paneId : null
     const list = this.node('div', 'pw-list')
     for (const pane of workspace.panes) {
-      list.append(this.paneRow(state, pane, live.get(pane.id), onScreen.has(pane.id), focused))
+      list.append(this.paneRow(state, pane, live.get(pane.id), onScreen.has(pane.id), focused, isPaneOn(current, pane.id), current.name))
       if (state.editingPaneId === pane.id) list.append(this.paneEditor(state, pane))
     }
     const endZone = this.node('div', 'pw-drop-end')
     this.makeDropTarget(state, endZone, null)
     list.append(endZone)
     el.append(list)
+
+    if (focusKey) {
+      const again = el.querySelector(`[data-draft="${focusKey}"]`) as HTMLInputElement | null
+      if (again) {
+        again.focus()
+        if (selection) try { again.setSelectionRange(selection[0], selection[1]) } catch { /* not a text field */ }
+      }
+    }
+  }
+
+  /** Set while rendering: whether the open editor was just opened (and gets the focus). */
+  private autofocus = false
+
+  /** Ties a form field to the drafts: shows the unsaved value, records every change. */
+  private draft<T extends HTMLInputElement | HTMLSelectElement>(state: WorkspaceTabState, key: string, field: T): T {
+    field.dataset.draft = key
+    const isCheck = field instanceof HTMLInputElement && field.type === 'checkbox'
+    const saved = state.drafts.get(key)
+    if (saved !== undefined) {
+      if (isCheck) (field as HTMLInputElement).checked = saved === '1'
+      else field.value = saved
+    }
+    const record = () => state.drafts.set(key, isCheck ? ((field as HTMLInputElement).checked ? '1' : '0') : field.value)
+    field.addEventListener('input', record)
+    field.addEventListener('change', record)
+    return field
+  }
+
+  /** Colour picker whose choice is kept in the drafts. */
+  private draftColor(state: WorkspaceTabState, key: string, initial: string): { element: HTMLElement, value: () => string } {
+    return this.colorPicker(state.drafts.get(key) ?? initial, (color) => state.drafts.set(key, color))
   }
 
   private paneRow(
@@ -773,22 +1136,24 @@ export class LayoutService {
     pane: WorkspacePane,
     tab: BaseTabComponent | undefined,
     onScreen: boolean,
-    focused: string | null
+    focused: string | null,
+    on: boolean,
+    viewName: string
   ): HTMLElement {
     const title = (tab ? (tab.customTitle || tab.title) : '') || pane.name || pane.startupCommand || 'New pane'
     const sub = [pane.name, pane.startupCommand].filter(Boolean).join(' · ')
-    const noRoom = !pane.hidden && !onScreen && state.view.kind === 'all'
+    const noRoom = on && !onScreen && state.view.kind === 'all'
     const hasNews = !onScreen && state.unseen.has(pane.id)
 
     const classes = ['pw-row', 'pw-pane']
     if (onScreen) classes.push('onscreen')
     if (pane.id === focused) classes.push('focused')
-    if (pane.hidden) classes.push('off')
+    if (!on) classes.push('off')
     if (state.editingPaneId === pane.id) classes.push('editing')
     const row = this.node('div', classes.join(' '))
     row.title = [
-      onScreen ? 'On screen' : tab ? 'Running, not on screen' : 'Not running (shown again by View all or its title)',
-      pane.hidden ? 'switched off (not in "View all")' : noRoom ? 'switched on, but no room at the minimum pane size' : '',
+      onScreen ? 'On screen' : tab ? 'Running, not on screen' : 'Not running (shown again by a view or its title)',
+      !on ? `switched off in "${viewName}"` : noRoom ? 'switched on, but no room at the minimum pane size' : '',
     ].filter(Boolean).join(' · ')
 
     // Sorting: drag the row (the handle shows where to grab)
@@ -826,19 +1191,20 @@ export class LayoutService {
       if (pane.id === focused) this.showAll(state, true)
       else this.showFocus(state, pane.id)
     }
-    text.title = pane.id === focused ? 'Back to "View all"' : 'Show this pane alone'
+    text.title = pane.id === focused ? `Back to "${viewName}"` : 'Show this pane alone'
 
     const sw = this.node('label', 'pw-switch')
-    sw.title = pane.hidden ? 'Off: not in "View all"' : 'On: in "View all"'
+    sw.title = on ? `On: shown in "${viewName}"` : `Off: not in "${viewName}"`
     const input = document.createElement('input')
     input.type = 'checkbox'
-    input.checked = !pane.hidden
+    input.checked = on
     input.onchange = () => this.toggleShown(state, pane.id)
     sw.append(input, this.node('span', 'pw-slider'))
     sw.addEventListener('click', (e) => e.stopPropagation())
 
     const more = this.button('pw-icon-btn pw-more', '⋯', 'Edit pane', () => {
       state.editingPaneId = state.editingPaneId === pane.id ? null : pane.id
+      state.editingViewId = null
       state.menuOpen = false
       this.render(state, true)
     })
@@ -847,11 +1213,68 @@ export class LayoutService {
     return row
   }
 
+  private viewRow(
+    state: WorkspaceTabState,
+    workspace: Workspace,
+    view: WorkspaceView,
+    selected: boolean,
+    onScreen: Set<string | null>
+  ): HTMLElement {
+    const enabled = workspace.panes.filter((p) => isPaneOn(view, p.id))
+    const showing = selected && state.view.kind === 'all'
+    const shownCount = enabled.filter((p) => onScreen.has(p.id)).length
+    const classes = ['pw-row', 'pw-all', 'pw-view']
+    if (showing) classes.push('active')
+    else if (selected) classes.push('selected')
+    if (state.editingViewId === view.id) classes.push('editing')
+    const row = this.node('div', classes.join(' '))
+    row.append(
+      this.node('span', 'pw-main', view.name),
+      this.node('span', 'pw-count', showing ? `${shownCount} / ${enabled.length}` : `${enabled.length} on`),
+      this.button('pw-icon-btn pw-more', '⋯', 'Edit view', () => {
+        state.editingViewId = state.editingViewId === view.id ? null : view.id
+        state.editingPaneId = null
+        state.menuOpen = false
+        this.render(state, true)
+      })
+    )
+    row.title = selected
+      ? 'Selected view: the pane switches below belong to it. Click to show its panes in a grid'
+      : 'Select this view and show its switched-on panes in a grid'
+    row.onclick = () => this.selectView(state, view.id)
+    return row
+  }
+
+  private viewEditor(state: WorkspaceTabState, workspace: Workspace, view: WorkspaceView): HTMLElement {
+    const box = this.node('div', 'pw-form')
+    const name = this.draft(state, 'name', this.input('text', view.name, 'View name'))
+    box.append(
+      this.field('Name', name),
+      this.node('div', 'pw-hint', 'Select the view, then use the pane switches to choose what it shows.'),
+    )
+    const save = () => this.renameView(state, view.id, name.value)
+    name.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') save()
+      if (e.key === 'Escape') { state.editingViewId = null; this.render(state, true) }
+    })
+    const actions = this.node('div', 'pw-actions')
+    actions.append(
+      this.button('pw-btn primary', 'Save', 'Save the view name', save),
+      this.button('pw-btn', 'Duplicate', 'New view with the same switches', () => this.duplicateView(state, view.id)),
+    )
+    if (workspace.views.length > 1) {
+      actions.append(this.button('pw-btn danger', 'Delete', 'Delete this view (panes keep running)', () => this.deleteView(state, view.id)))
+    }
+    box.append(actions)
+    if (this.autofocus) setTimeout(() => { name.focus(); name.select() }, 0)
+    return box
+  }
+
   private paneEditor(state: WorkspaceTabState, pane: WorkspacePane): HTMLElement {
     const box = this.node('div', 'pw-form')
-    const name = this.input('text', pane.name ?? '', 'optional')
-    const command = this.input('text', pane.startupCommand ?? '', 'e.g. c 1')
-    const cwd = this.input('text', pane.cwd ?? '', 'C:\\path or /home/user')
+    const name = this.draft(state, 'name', this.input('text', pane.name ?? '', 'optional'))
+    const command = this.draft(state, 'command', this.input('text', pane.startupCommand ?? '', 'e.g. c 1'))
+    const cwd = this.draft(state, 'cwd', this.input('text', pane.cwd ?? '', 'C:\\path or /home/user'))
     const profile = document.createElement('select')
     profile.className = 'pw-input'
     const empty = document.createElement('option')
@@ -865,8 +1288,9 @@ export class LayoutService {
       profile.append(option)
     }
     profile.value = pane.profileId ?? ''
+    this.draft(state, 'profile', profile)
 
-    const colors = this.colorPicker(pane.color ?? '')
+    const colors = this.draftColor(state, 'color', pane.color ?? '')
 
     box.append(
       this.field('Name', name),
@@ -896,15 +1320,19 @@ export class LayoutService {
         await save()
         await this.restartPane(state, pane.id)
       }),
+      this.button('pw-btn', 'Duplicate', 'Save, then add a copy of this pane (same settings and view switches)', async () => {
+        await save()
+        await this.duplicatePane(state, pane.id)
+      }),
       this.button('pw-btn danger', 'Remove', 'Remove the pane from the workspace', () => this.removePane(state, pane.id)),
     )
     box.append(actions)
-    setTimeout(() => name.focus(), 0)
+    if (this.autofocus) setTimeout(() => name.focus(), 0)
     return box
   }
 
   /** Colour choice: presets, a custom picker, or none (''). */
-  private colorPicker(initial: string): { element: HTMLElement, value: () => string } {
+  private colorPicker(initial: string, onChange?: (color: string) => void): { element: HTMLElement, value: () => string } {
     let chosen = initial
     const colors = this.node('div', 'pw-colors')
     const custom = document.createElement('input')
@@ -921,6 +1349,7 @@ export class LayoutService {
     for (const color of ['', ...PANE_COLORS]) {
       const swatch = this.button('pw-swatch' + (color ? '' : ' none'), '', color ? color : 'No colour', () => {
         chosen = color
+        onChange?.(chosen)
         paint()
       })
       swatch.dataset.color = color
@@ -929,6 +1358,7 @@ export class LayoutService {
     }
     custom.addEventListener('input', () => {
       chosen = custom.value
+      onChange?.(chosen)
       paint()
     })
     colors.append(custom)
@@ -938,9 +1368,9 @@ export class LayoutService {
 
   private workspaceMenu(state: WorkspaceTabState, workspace: Workspace): HTMLElement {
     const box = this.node('div', 'pw-form pw-menu')
-    const name = this.input('text', workspace.name, 'Workspace name')
-    const minW = this.input('number', workspace.minPaneWidth ? String(workspace.minPaneWidth) : '', String(DEFAULT_MIN_PANE_WIDTH))
-    const minH = this.input('number', workspace.minPaneHeight ? String(workspace.minPaneHeight) : '', String(DEFAULT_MIN_PANE_HEIGHT))
+    const name = this.draft(state, 'name', this.input('text', workspace.name, 'Workspace name'))
+    const minW = this.draft(state, 'minW', this.input('number', workspace.minPaneWidth ? String(workspace.minPaneWidth) : '', String(DEFAULT_MIN_PANE_WIDTH)))
+    const minH = this.draft(state, 'minH', this.input('number', workspace.minPaneHeight ? String(workspace.minPaneHeight) : '', String(DEFAULT_MIN_PANE_HEIGHT)))
     minW.classList.add('pw-size')
     minH.classList.add('pw-size')
     const size = this.node('div', 'pw-size-row')
@@ -948,11 +1378,12 @@ export class LayoutService {
     const startup = document.createElement('input')
     startup.type = 'checkbox'
     startup.checked = !!workspace.launchOnStartup
+    this.draft(state, 'startup', startup)
     const startupLabel = this.node('label', 'pw-check')
     startupLabel.append(startup, this.node('span', '', 'Open when Tabby starts'))
-    const tabColor = this.colorPicker(workspace.color ?? '')
+    const tabColor = this.draftColor(state, 'color', workspace.color ?? '')
     const firstPaneFolder = workspace.panes.find((p) => p.cwd?.trim())?.cwd?.trim()
-    const folder = this.input('text', workspace.folder ?? '', firstPaneFolder || 'C:\\path or /home/user')
+    const folder = this.draft(state, 'folder', this.input('text', workspace.folder ?? '', firstPaneFolder || 'C:\\path or /home/user'))
 
     box.append(
       this.field('Name', name),
@@ -960,7 +1391,7 @@ export class LayoutService {
       this.field('Project folder', folder),
       this.node('div', 'pw-hint', 'Opened by the VS Code button. Empty: the first pane folder.'),
       this.field('Minimum pane size', size),
-      this.node('div', 'pw-hint', '"View all" fits as many switched-on panes as this size allows.'),
+      this.node('div', 'pw-hint', 'A view fits as many switched-on panes as this size allows.'),
       startupLabel,
     )
     const save = () => this.saveWorkspaceSettings(state, {
@@ -983,6 +1414,13 @@ export class LayoutService {
       this.button('pw-btn', 'Close', 'Close the menu', () => { state.menuOpen = false; this.render(state, true) }),
     )
     box.append(actions)
+    box.append(
+      this.button('pw-menu-item', 'Edit settings in VS Code', 'Open this workspace as a JSON file; every save there is applied right away', () => {
+        state.menuOpen = false
+        this.render(state, true)
+        this.workspaces.openConfigInVsCode(workspace)
+      }),
+    )
 
     // Other workspaces
     box.append(this.node('div', 'pw-menu-title', 'Workspaces'))
@@ -1000,7 +1438,7 @@ export class LayoutService {
       box.append(item)
     }
     box.append(
-      this.button('pw-menu-item', '+ New workspace', 'Create a workspace with one pane', () => {
+      this.button('pw-menu-item', '+ New workspace', 'Create a workspace from a profile, folder and command', () => {
         state.menuOpen = false
         this.render(state, true)
         this.createWorkspace()
@@ -1108,6 +1546,20 @@ export class LayoutService {
         background: var(--theme-primary, #4c9aff);
       }
 
+      .paneworks-overlay {
+        position: fixed; inset: 0; z-index: 10000; display: flex; align-items: flex-start; justify-content: center;
+        padding-top: 12vh; background: rgba(0,0,0,.45);
+      }
+      .paneworks-sidebar.pw-dialog {
+        width: 380px; max-width: calc(100vw - 32px); border: 1px solid var(--theme-bg-more-2, rgba(255,255,255,.12));
+        border-radius: 6px; background: var(--theme-bg, #1e1e1e); box-shadow: 0 10px 40px rgba(0,0,0,.5); overflow: visible;
+      }
+      .paneworks-sidebar.pw-dialog .pw-form { margin: 0; padding: 14px; gap: 8px; background: none; }
+      .paneworks-sidebar .pw-dialog-title { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+      .paneworks-sidebar .pw-folder-row { display: flex; gap: 4px; }
+      .paneworks-sidebar .pw-folder-row .pw-input { flex: 1; min-width: 0; }
+      .paneworks-sidebar .pw-folder-row .pw-btn { flex: none; }
+
       .paneworks-sidebar {
         --pw-accent: var(--theme-primary, #4c9aff);
         display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden;
@@ -1148,6 +1600,13 @@ export class LayoutService {
       .paneworks-sidebar .pw-all .pw-main { flex: 1; font-weight: 600; }
       .paneworks-sidebar .pw-all.active { border-left-color: var(--pw-accent); background: rgba(127,127,127,.14); }
       .paneworks-sidebar .pw-count { font-size: 10px; opacity: .55; }
+      .paneworks-sidebar .pw-view { padding-right: 4px; }
+      .paneworks-sidebar .pw-view .pw-main { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .paneworks-sidebar .pw-view.active .pw-main, .paneworks-sidebar .pw-view.selected .pw-main { font-weight: 600; }
+      .paneworks-sidebar .pw-view.selected { border-left-color: rgba(127,127,127,.5); }
+      .paneworks-sidebar .pw-view.editing { background: rgba(127,127,127,.14); }
+      .paneworks-sidebar .pw-empty-view { padding: 4px 10px; }
+      .paneworks-sidebar .pw-section-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
       /* Pane states: on screen = accent bar + full brightness; running elsewhere = dimmed;
          switched off = dimmer; focus view = highlighted row. */
@@ -1192,7 +1651,7 @@ export class LayoutService {
         background: var(--pw-accent); color: var(--theme-bg, #000); font-weight: 600; text-transform: uppercase;
       }
       .paneworks-sidebar .pw-more { opacity: .35; font-size: 14px; }
-      .paneworks-sidebar .pw-row:hover .pw-more, .paneworks-sidebar .pw-pane.editing .pw-more { opacity: .9; }
+      .paneworks-sidebar .pw-row:hover .pw-more, .paneworks-sidebar .pw-row.editing .pw-more { opacity: .9; }
 
       .paneworks-sidebar .pw-switch { position: relative; flex: 0 0 26px; height: 14px; cursor: pointer; }
       .paneworks-sidebar .pw-switch input { opacity: 0; width: 0; height: 0; position: absolute; }

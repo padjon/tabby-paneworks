@@ -1,6 +1,10 @@
 import { Injectable } from '@angular/core'
 import { spawn } from 'child_process'
-import { ConfigService, NotificationsService, ProfilesService } from 'tabby-core'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import { Subject } from 'rxjs'
+import { ConfigService, NotificationsService, PlatformService, ProfilesService } from 'tabby-core'
 import {
   Workspace,
   WorkspacePane,
@@ -13,10 +17,13 @@ import {
   makePaneMarker,
   formatPaneLabel,
   normalizeWorkspace,
+  deepClone,
   planGrid,
   gridTree,
   DEFAULT_MIN_PANE_WIDTH,
   DEFAULT_MIN_PANE_HEIGHT,
+  activeView,
+  isPaneOn,
 } from '../models/workspace.model'
 
 /** Width of the Paneworks sidebar in a workspace tab (px). */
@@ -26,16 +33,31 @@ const CHROME_HEIGHT = 80
 import { CONFIG_KEY, DISPLAY_NAME } from '../build-config'
 import { PendingCommand } from './paneRuntime.service'
 
+/** A workspace's config file open for editing. */
+interface ConfigFile {
+  file: string
+  /** Text last written or read; a change to anything else is an edit. */
+  written: string
+  /** The last save was not valid: the sidebar doesn't write back, so the user's edits stay. */
+  invalid?: boolean
+}
+
 @Injectable({ providedIn: 'root' })
 export class WorkspaceEditorService {
   private cachedProfiles: TabbyProfile[] | null = null
   private cacheTimestamp: number = 0
   private readonly CACHE_TTL = 30000 // 30 seconds
 
+  /** Workspace config files open for editing: workspace id -> file and the text last written to it. */
+  private configFiles = new Map<string, ConfigFile>()
+  /** Fires when a workspace's config file was saved and applied, with the settings from before. */
+  readonly workspaceEdited$ = new Subject<{ workspaceId: string, before: Workspace }>()
+
   constructor(
     private config: ConfigService,
     private notifications: NotificationsService,
-    private profilesService: ProfilesService
+    private profilesService: ProfilesService,
+    private platform: PlatformService
   ) {}
 
   private async getCachedProfiles(): Promise<TabbyProfile[]> {
@@ -51,7 +73,11 @@ export class WorkspaceEditorService {
   getWorkspaces(): Workspace[] {
     const workspaces: Workspace[] = this.config.store?.[CONFIG_KEY]?.workspaces ?? []
     for (const workspace of workspaces) {
-      if (!Array.isArray(workspace.panes)) normalizeWorkspace(workspace)
+      if (!Array.isArray(workspace.panes) || !Array.isArray(workspace.views) || !workspace.views.length ||
+        workspace.panes.some((p) => !p || 'hidden' in p) ||
+        workspace.views.some((v) => !v || typeof v !== 'object' || (v.hidden !== undefined && !Array.isArray(v.hidden)))) {
+        normalizeWorkspace(workspace)
+      }
     }
     return workspaces
   }
@@ -66,6 +92,7 @@ export class WorkspaceEditorService {
     if (index === -1) return
     workspaces[index] = workspace
     await this.saveWorkspaces(workspaces)
+    this.writeConfigFile(workspace)
   }
 
   /** Minimum pane size of a workspace, with defaults. */
@@ -77,11 +104,12 @@ export class WorkspaceEditorService {
   }
 
   /**
-   * "View all" grid of a workspace for a pane area: the switched-on panes in order,
-   * as many as fit. Returns the tree and the ids of the panes that fit.
+   * Grid of the selected view for a pane area: the panes switched on in that view, in
+   * order, as many as fit. Returns the tree and the ids of the panes that fit.
    */
   planViewAll(workspace: Workspace, width: number, height: number): { tree: LayoutSplit | null, shown: string[] } {
-    const visible = workspace.panes.filter((p) => !p.hidden).map((p) => p.id)
+    const view = activeView(workspace)
+    const visible = workspace.panes.filter((p) => isPaneOn(view, p.id)).map((p) => p.id)
     const min = this.minPaneSize(workspace)
     const rows = planGrid(visible.length, width, height, min.width, min.height)
     const count = rows.reduce((a, b) => a + b, 0)
@@ -139,6 +167,7 @@ export class WorkspaceEditorService {
     try {
       const filtered = workspaces.filter((w) => w.id !== workspaceId)
       await this.saveWorkspaces(filtered)
+      this.closeConfigFile(workspaceId)
       if (workspace) {
         this.notifications.info(`Workspace "${workspace.name}" deleted`)
       }
@@ -330,7 +359,6 @@ export class WorkspaceEditorService {
     return profile.type === 'local' || profile.type?.startsWith('local:') || false
   }
 
-  /** Detects WSL profiles by ID prefix (built-in) or command path (user-defined). */
   // ---------- VS Code ----------
 
   /**
@@ -340,9 +368,11 @@ export class WorkspaceEditorService {
    */
   projectFolder(workspace: Workspace): { path: string, wsl: boolean, distro: string | null } | null {
     const pane = workspace.panes.find((p) => p.cwd?.trim())
-    const path = workspace.folder?.trim() || pane?.cwd?.trim()
+    let path = workspace.folder?.trim() || pane?.cwd?.trim()
     if (!path) return null
-    const wsl = process.platform === 'win32' && path.startsWith('/')
+    // On Windows a Unix path (or ~) is a WSL folder; elsewhere ~ is the user's home
+    const wsl = process.platform === 'win32' && (path.startsWith('/') || path === '~' || path.startsWith('~/'))
+    if (!wsl && (path === '~' || path.startsWith('~/'))) path = os.homedir() + path.slice(1)
     if (!wsl) return { path, wsl, distro: null }
     // The distro of the first WSL pane (the folder's own pane first)
     const panes = pane ? [pane, ...workspace.panes] : workspace.panes
@@ -363,13 +393,236 @@ export class WorkspaceEditorService {
       this.notifications.info('No project folder: set one in the workspace menu, or a folder on a pane')
       return
     }
-    const quote = (s: string) => `"${s.replace(/"/g, '\\"')}"`
-    const command = folder.wsl
-      ? `wsl.exe ${folder.distro ? `-d ${quote(folder.distro)} ` : ''}--cd ${quote(folder.path)} code .`
-      : `code ${quote(folder.path)}`
+    if (folder.wsl) {
+      // wsl.exe is a real executable: arguments go through without a shell
+      // --cd takes an absolute path or a bare ~; ~/x opens x relative to the home folder
+      const home = folder.path.startsWith('~/')
+      this.spawnCode('wsl.exe', [...(folder.distro ? ['-d', folder.distro] : []),
+        '--cd', home ? '~' : folder.path, 'code', home ? folder.path.slice(2) : '.'])
+    } else {
+      this.spawnCode('code', [folder.path])
+    }
+  }
+
+  /** Copies the project folder path to the clipboard. */
+  copyProjectFolder(workspace: Workspace): void {
+    const folder = this.projectFolder(workspace)
+    if (!folder) {
+      this.notifications.info('No project folder: set one in the workspace menu, or a folder on a pane')
+      return
+    }
+    this.platform.setClipboard({ text: folder.path })
+    this.notifications.info(`Copied ${folder.path}`)
+  }
+
+  /**
+   * Opens a workspace's settings as a JSON file in VS Code. Tabby keeps its config.yaml
+   * in memory and overwrites it on save, so the workspace gets a file of its own next to
+   * it, written with the current settings on every open. Every save there is checked and
+   * applied right away (workspaceEdited$); changes made in the sidebar are written back
+   * to the file while it is watched (this session).
+   */
+  openConfigInVsCode(workspace: Workspace): void {
+    const file = this.writeConfigFile(workspace, true)
+    if (!file) return
+    this.spawnCode('code', [file])
+  }
+
+  private configFilePath(workspace: Workspace): string {
+    const configPath = this.platform.getConfigPath()
+    const dir = path.join(configPath ? path.dirname(configPath) : os.tmpdir(), 'paneworks')
+    const suffix = `-${workspace.id.replace(/[^A-Za-z0-9_-]/g, '_')}.json`
+    // The name part follows the workspace name; after a rename, keep using the existing file
     try {
-      const child = spawn(command, { shell: true, detached: true, stdio: 'ignore', windowsHide: true })
-      child.on('error', () => this.vsCodeFailed())
+      const existing = fs.readdirSync(dir).find((f) => f.endsWith(suffix))
+      if (existing) return path.join(dir, existing)
+    } catch {
+      // no folder yet
+    }
+    const slug = workspace.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'workspace'
+    return path.join(dir, slug + suffix)
+  }
+
+  /** Writes the workspace to its config file (only one already watched, unless `start`). Returns the path. */
+  private writeConfigFile(workspace: Workspace, start = false): string | null {
+    let entry = this.configFiles.get(workspace.id)
+    if (!entry && !start) return null
+    const text = JSON.stringify(workspace, null, 2) + '\n'
+    try {
+      if (!entry) {
+        const file = this.configFilePath(workspace)
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        entry = { file, written: '' }
+        this.configFiles.set(workspace.id, entry)
+        const watched = entry
+        fs.watchFile(file, { interval: 700 }, () => this.configFileChanged(workspace.id, watched))
+      }
+      // Opening it again starts over from the current settings (also after an invalid save)
+      if (start) entry.invalid = false
+      else {
+        // A save the watcher hasn't picked up yet: apply it instead of writing over it
+        let onDisk: string | null = null
+        try { onDisk = fs.readFileSync(entry.file, 'utf8') } catch { /* gone: write it again */ }
+        if (onDisk !== null && onDisk !== entry.written && onDisk.trim()) {
+          this.configFileChanged(workspace.id, entry)
+          return entry.file
+        }
+      }
+      if (text !== entry.written && !entry.invalid) {
+        fs.writeFileSync(entry.file, text)
+        entry.written = text
+      }
+      return entry.file
+    } catch (error) {
+      console.error(`[${DISPLAY_NAME}] Could not write the workspace file:`, error)
+      this.notifications.error(`Could not write the workspace file: ${error}`)
+      return null
+    }
+  }
+
+  private closeConfigFile(workspaceId: string): void {
+    const entry = this.configFiles.get(workspaceId)
+    if (!entry) return
+    fs.unwatchFile(entry.file)
+    this.configFiles.delete(workspaceId)
+  }
+
+  private async configFileChanged(workspaceId: string, entry: ConfigFile): Promise<void> {
+    let text: string
+    try {
+      text = fs.readFileSync(entry.file, 'utf8')
+    } catch {
+      return // removed or being replaced; the next save triggers again
+    }
+    if (text === entry.written || !text.trim()) return
+    entry.written = text
+    const workspaces = this.getWorkspaces()
+    const index = workspaces.findIndex((w) => w.id === workspaceId)
+    if (index === -1) {
+      this.closeConfigFile(workspaceId)
+      return
+    }
+    let edited: Workspace
+    try {
+      edited = this.parseWorkspace(text, workspaces[index])
+    } catch (error) {
+      if (!entry.invalid) {
+        this.notifications.error(`${workspaces[index].name}: not applied, ${(error as Error).message}. ` +
+          'Until the file is valid, sidebar changes are not written to it; "Edit settings in VS Code" starts it over.')
+      } else {
+        this.notifications.error(`${workspaces[index].name}: not applied, ${(error as Error).message}`)
+      }
+      entry.invalid = true
+      return
+    }
+    entry.invalid = false
+    const target = workspaces[index]
+    const before = deepClone(target)
+    // In place, so sidebar actions holding this workspace see the edit instead of saving over it
+    for (const key of Object.keys(target)) delete (target as unknown as Record<string, unknown>)[key]
+    Object.assign(target, edited)
+    await this.saveWorkspaces(workspaces)
+    // Normalising may have changed it (e.g. ids added): show that in the file
+    this.writeConfigFile(target)
+    this.notifications.info(`${target.name}: settings applied from the file`)
+    this.workspaceEdited$.next({ workspaceId, before })
+  }
+
+  /** Checks an edited workspace file. Ids missing on panes and views are generated; the workspace id stays. */
+  private parseWorkspace(text: string, current: Workspace): Workspace {
+    let data: Workspace
+    try {
+      data = JSON.parse(text)
+    } catch (error) {
+      throw new Error(`invalid JSON (${(error as Error).message})`)
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('the file must hold one JSON object')
+    if (!Array.isArray(data.panes) || !data.panes.length) throw new Error('"panes" must be a list with at least one pane')
+    for (const pane of data.panes) {
+      if (!pane || typeof pane !== 'object') throw new Error('every pane must be an object')
+      if (typeof pane.id !== 'string' || !pane.id) pane.id = generateUUID()
+      if (typeof pane.profileId !== 'string') throw new Error(`pane ${pane.name ?? pane.id}: "profileId" must be a string`)
+      for (const key of ['name', 'cwd', 'startupCommand', 'color'] as const) {
+        if (pane[key] === null) delete pane[key]
+        if (pane[key] !== undefined && typeof pane[key] !== 'string') {
+          throw new Error(`pane ${pane.id}: "${key}" must be a string`)
+        }
+      }
+    }
+    for (const key of ['name', 'folder', 'color', 'icon', 'activeViewId'] as const) {
+      if (data[key] === null) delete data[key]
+      if (data[key] !== undefined && typeof data[key] !== 'string') throw new Error(`"${key}" must be a string`)
+    }
+    for (const key of ['minPaneWidth', 'minPaneHeight'] as const) {
+      if (data[key] === null) delete data[key]
+      if (data[key] !== undefined && (typeof data[key] !== 'number' || !(data[key]! > 0))) {
+        throw new Error(`"${key}" must be a number above 0`)
+      }
+    }
+    if (data.launchOnStartup !== undefined && typeof data.launchOnStartup !== 'boolean') {
+      throw new Error('"launchOnStartup" must be true or false')
+    }
+    const paneIds = data.panes.map((p) => p.id)
+    if (new Set(paneIds).size !== paneIds.length) throw new Error('two panes have the same id')
+    if (data.views !== undefined) {
+      if (!Array.isArray(data.views)) throw new Error('"views" must be a list')
+      const viewIds = new Set<string>()
+      for (const view of data.views) {
+        if (!view || typeof view !== 'object') throw new Error('every view must be an object')
+        // Missing or repeated (a copied block): a new id
+        if (typeof view.id !== 'string' || !view.id || viewIds.has(view.id)) view.id = generateUUID()
+        viewIds.add(view.id)
+        if (typeof view.name !== 'string' || !view.name.trim()) throw new Error('every view needs a "name"')
+        if (view.hidden !== undefined && !Array.isArray(view.hidden)) throw new Error(`view ${view.name}: "hidden" must be a list of pane ids`)
+        if (view.hidden) {
+          if (view.hidden.some((id) => typeof id !== 'string')) throw new Error(`view ${view.name}: "hidden" must be a list of pane ids`)
+          view.hidden = view.hidden.filter((id) => paneIds.includes(id))
+          if (!view.hidden.length) delete view.hidden
+        }
+      }
+    }
+    data.id = current.id
+    if (typeof data.name !== 'string' || !data.name.trim()) data.name = current.name
+    return normalizeWorkspace(deepClone(data))
+  }
+
+  /**
+   * Starts a program without a shell, so paths are never interpreted. On Windows `code` is a
+   * batch file, which only cmd.exe can run: it gets the arguments quoted, and paths with
+   * characters cmd.exe would still interpret (" % ! ^ & | < > and line breaks) are refused.
+   */
+  private spawnCode(program: string, args: string[]): void {
+    let command = program
+    let argv = args
+    let options: Record<string, unknown> = { detached: true, stdio: 'ignore', windowsHide: true }
+    if (process.platform === 'win32' && program === 'code') {
+      // Inside quotes cmd.exe takes & | < > ^ literally (and ! with /v:off); " and % it would not
+      if (args.some((a) => /["%\r\n]/.test(a))) {
+        this.notifications.error('This path has characters that cannot be passed to VS Code safely: " or %')
+        return
+      }
+      command = process.env.ComSpec || 'cmd.exe'
+      // Backslashes before a closing quote are doubled (else C:\\ would escape the quote)
+      argv = ['/d', '/v:off', '/s', '/c', `"code ${args.map((a) => `"${a.replace(/(\\+)$/, '$1$1')}"`).join(' ')}"`]
+      options = { ...options, windowsVerbatimArguments: true }
+    }
+    try {
+      const child = spawn(command, argv, options)
+      child.on('error', (error: NodeJS.ErrnoException) => {
+        // Started from Finder or a desktop launcher, Tabby may not have `code` on its PATH:
+        // try again through the login shell (arguments as positional parameters, never parsed)
+        if (error.code === 'ENOENT' && process.platform !== 'win32' && program === 'code') {
+          // "$@" needs a POSIX shell (not fish); a login shell sets up the user's PATH
+          const userShell = process.env.SHELL ?? ''
+          const shell = /\/(ba|z|k|da)?sh$/.test(userShell) ? userShell : '/bin/sh'
+          const retry = spawn(shell, ['-lc', 'exec code "$@"', 'code', ...args], options)
+          retry.on('error', () => this.vsCodeFailed())
+          retry.on('exit', (code) => { if (code) this.vsCodeFailed() })
+          retry.unref()
+          return
+        }
+        this.vsCodeFailed()
+      })
       child.on('exit', (code) => { if (code) this.vsCodeFailed() })
       child.unref()
     } catch {
@@ -388,6 +641,7 @@ export class WorkspaceEditorService {
     return i >= 0 && args[i + 1] ? args[i + 1] : null
   }
 
+  /** Detects WSL profiles by ID prefix (built-in) or command path (user-defined). */
   private isWslProfile(profile: TabbyProfile): boolean {
     // Built-in WSL profiles: id starts with 'local:wsl'
     if (profile.id?.startsWith('local:wsl')) {

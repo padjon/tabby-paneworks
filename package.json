@@ -1,6 +1,6 @@
 {
   "name": "tabby-paneworks",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Workspaces for Tabby: terminal panes with startup commands, arranged automatically by a minimum pane size and managed from a sidebar (focus view, on/off switches, drag-and-drop order, label colours). Panes show their program title; the tab shows the workspace name.",
   "keywords": [
     "tabby",
