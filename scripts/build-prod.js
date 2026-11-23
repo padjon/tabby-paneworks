@@ -46,3 +46,8 @@ for (const file of ['README.md', 'LICENSE']) {
 }
 
 console.log('Production build complete: dist/')
+
+// 5. Keep a local Tabby that has the plugin installed on this build (not in CI)
+if (!process.env.CI) {
+  require('./install-local').installLocal(distDir, prodPkg.name)
+}

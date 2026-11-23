@@ -42,6 +42,9 @@ fs.writeFileSync(
 )
 
 console.log('Dev build complete: dist-dev/')
+if (!process.env.CI) {
+  require('./install-local').installLocal(distDevDir, devPkg.name)
+}
 console.log('')
 console.log('To install:')
 console.log(`  cd "$APPDATA/tabby/plugins" && npm install "${distDevDir.replace(/\\/g, '/')}"`)

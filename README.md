@@ -127,13 +127,15 @@ npm run build
 
 `.npmrc` sets `legacy-peer-deps`, so npm doesn't pull Tabby's own packages. The build writes `dist/`: the published package (plugin code, its `package.json`, README, LICENSE).
 
-To try a local build in Tabby, link it in place of the published version and restart Tabby after each `npm run build`:
+To try a local build in Tabby, install it once in place of the published version:
 
 ```
 cd %APPDATA%\tabby\plugins
 npm uninstall tabby-paneworks
 npm install --legacy-peer-deps <path to this repo>\dist
 ```
+
+After that, every `npm run build` (and `npm run build:dev` for the DEV variant) copies the build into the local Tabby (from Windows or WSL), including the folder a `file:` install points to, so a reinstall from Tabby's plugin manager can't bring back an older build. Restart Tabby to load it. CI builds skip this.
 
 Back to the published version: `npm uninstall tabby-paneworks`, then install it from Tabby's plugin manager. Console messages are prefixed `[Paneworks]` (Ctrl+Shift+I in Tabby).
 
