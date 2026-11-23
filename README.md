@@ -16,6 +16,7 @@ Made for running several long-lived sessions side by side (coding agents, dev se
 - **Label colours** per pane, so you recognise panes at a glance.
 - **NEW marker** on hidden panes that printed something since you last looked.
 - **Startup commands** that wait for the shell to be ready.
+- **F1 opens the Paneworks menu** (open or create a workspace) from anywhere in Tabby. Rebind it under **Settings → Hotkeys → Paneworks: open menu**.
 - **Everything in the sidebar**: add, edit, restart and remove panes; rename, configure, create, switch and delete workspaces. No settings page.
 
 ![Focus view: one pane full size](https://raw.githubusercontent.com/padjon/tabby-paneworks/main/docs/screenshots/focus.png)
@@ -26,12 +27,12 @@ In Tabby: **Settings → Plugins**, search **paneworks**, **Install**, restart T
 
 ## Getting started
 
-1. Click the **Paneworks** button (grid icon) in Tabby's toolbar and choose **New workspace**. It opens with one pane and the sidebar on the left.
+1. Click the **Paneworks** button (grid icon) in Tabby's toolbar, or press **F1**, and choose **New workspace**. It opens with one pane and the sidebar on the left.
 2. Click **+** next to "Panes" to add panes. For each pane set a name (optional), label colour, startup command, folder and profile, then **Save**. The pane starts right away.
 3. Click **View all** to see all switched-on panes in a grid.
 4. Click the workspace name at the top of the sidebar to rename it, set the minimum pane size or let it open when Tabby starts.
 
-Next time, open the workspace from the toolbar button. If it is already open, the button brings its tab to the front.
+Next time, open the workspace from the toolbar button or F1. If it is already open, this brings its tab to the front.
 
 When a workspace opens, you briefly see all of its panes: Tabby starts a terminal only once it has been on screen. As soon as every pane runs, Paneworks switches to "View all".
 
@@ -114,6 +115,7 @@ paneworks:
 - Panes live as long as the workspace tab. Closing the tab closes all of its panes, hidden ones included. After a Tabby restart, the workspace tab comes back through Tabby's tab recovery and starts its panes again.
 - If a pane's program exits, the pane closes; "View all" or its title starts it again.
 - Paneworks rearranges panes through Tabby's split-tab internals (the same mechanism as Tabby's own pane drag and drop). Developed and tested with Tabby 1.0.231 on Windows. A major Tabby update could need a Paneworks update.
+- Tabby catches F1 before the terminal does, so programs that use F1 themselves (htop, mc) won't see it. Rebind the hotkey if you need F1 there.
 - Paneworks keeps its data under its own config key and profile ids, so it does not interfere with other workspace plugins.
 
 ## Develop
@@ -137,12 +139,7 @@ Back to the published version: `npm uninstall tabby-paneworks`, then install it 
 
 ## Release
 
-```
-npm version patch      # or minor / major: bumps package.json, commits, tags vX.Y.Z
-git push --follow-tags
-```
-
-The tag runs `.github/workflows/release.yml`: build, publish to npm with trusted publishing (no token), GitHub release with generated notes.
+Every push to `main` runs `.github/workflows/release.yml`: build, publish to npm with trusted publishing (no token) and provenance, tag the commit `vX.Y.Z`. The version is `<major>.<minor>` from `package.json` plus the workflow run number, e.g. `1.0.17`. For a new minor or major version, change `package.json` by hand (e.g. to `1.1.0`).
 
 ## License
 

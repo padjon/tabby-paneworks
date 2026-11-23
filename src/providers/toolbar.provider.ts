@@ -1,8 +1,9 @@
 import { Injectable } from '@angular/core'
-import { ToolbarButtonProvider, ToolbarButton, AppService } from 'tabby-core'
+import { ToolbarButtonProvider, ToolbarButton, AppService, HotkeysService } from 'tabby-core'
 import { WorkspaceEditorService } from '../services/workspaceEditor.service'
 import { LayoutService } from '../services/layout.service'
 import { DISPLAY_NAME, IS_DEV } from '../build-config'
+import { OPEN_MENU_HOTKEY } from './hotkey.provider'
 
 const ICON_GRID = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
   <rect x="3" y="3" width="7" height="7"/>
@@ -18,7 +19,7 @@ const ICON_BOLT = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" f
 const NEW_WORKSPACE = '__new__'
 
 /**
- * The toolbar button: the entry point outside a workspace tab. Lists the workspaces
+ * The toolbar button (default hotkey F1): the entry point outside a workspace tab. Lists the workspaces
  * (open one, or bring it to the front if already open) and creates new ones.
  * Everything else is managed in the workspace tab's sidebar.
  */
@@ -27,9 +28,15 @@ export class WorkspaceToolbarProvider extends ToolbarButtonProvider {
   constructor(
     private workspaceService: WorkspaceEditorService,
     private app: AppService,
-    private layout: LayoutService
+    private layout: LayoutService,
+    hotkeys: HotkeysService
   ) {
     super()
+    hotkeys.hotkey$.subscribe((hotkey) => {
+      if (hotkey === OPEN_MENU_HOTKEY) {
+        this.showWorkspaceSelector()
+      }
+    })
     // Wait for Tabby to finish recovering tabs before launching startup workspaces
     this.waitForTabbyReady().then(() => {
       this.workspaceService.cleanupOrphanedProfiles()
