@@ -14,6 +14,7 @@ Made for running several long-lived sessions side by side (coding agents, dev se
 - **On/off switches and drag-and-drop order**, saved in the workspace.
 - **Live titles.** Each pane's label shows the title its program sets (for example a coding agent's session title), optionally prefixed with a pane name. The tab itself always shows the workspace name.
 - **Label colours** per pane, so you recognise panes at a glance.
+- **Open in VS Code** from the sidebar header: opens the workspace's project folder (set in the workspace menu; by default the first pane folder). WSL folders open in VS Code's WSL mode.
 - **Tab colour** per workspace, applied to the workspace tab every time it opens, also after a Tabby restart.
 - **NEW marker** on hidden panes that printed something since you last looked.
 - **Startup commands** that wait for the shell to be ready.
@@ -31,7 +32,7 @@ In Tabby: **Settings → Plugins**, search **paneworks**, **Install**, restart T
 1. Click the **Paneworks** button (grid icon) in Tabby's toolbar, or press **F1**, and choose **New workspace**. It opens with one pane and the sidebar on the left.
 2. Click **+** next to "Panes" to add panes. For each pane set a name (optional), label colour, startup command, folder and profile, then **Save**. The pane starts right away.
 3. Click **View all** to see all switched-on panes in a grid.
-4. Click the workspace name at the top of the sidebar to rename it, pick a tab colour, set the minimum pane size or let it open when Tabby starts.
+4. Click the workspace name at the top of the sidebar to rename it, pick a tab colour, set the project folder, set the minimum pane size or let it open when Tabby starts.
 
 Next time, open the workspace from the toolbar button or F1. If it is already open, this brings its tab to the front.
 
@@ -41,7 +42,8 @@ When a workspace opens, you briefly see all of its panes: Tabby starts a termina
 
 | Element | What it does |
 |---|---|
-| Workspace name (top) | Workspace menu: rename, tab colour, minimum pane size, open when Tabby starts, switch to or open another workspace, new workspace, delete this one |
+| Workspace name (top) | Workspace menu: rename, tab colour, project folder, minimum pane size, open when Tabby starts, switch to or open another workspace, new workspace, delete this one |
+| `</>` | Open the project folder in VS Code (needs the `code` command, which VS Code's installer puts on PATH) |
 | « / » | Collapse or expand the sidebar |
 | **View all** | All switched-on panes in a grid; shows how many are on screen out of how many are on |
 | **+** | Add a pane (opens its editor) |
@@ -95,6 +97,7 @@ paneworks:
     - id: 0b7c…                 # any unique id
       name: My project
       color: '#10b981'          # optional tab colour
+      folder: C:\code\my-project  # optional, for Open in VS Code (default: first pane folder)
       minPaneWidth: 600         # optional, px (default 600)
       minPaneHeight: 260        # optional, px (default 260)
       launchOnStartup: false

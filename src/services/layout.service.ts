@@ -29,6 +29,11 @@ import { SIDEBAR_WIDTH, WorkspaceEditorService } from './workspaceEditor.service
 /** Quick choices for pane label colours. */
 const PANE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316']
 
+/** "Open in VS Code" button: code brackets. */
+const ICON_CODE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+</svg>`
+
 const SIDEBAR_COLLAPSED_WIDTH = 22
 const REFRESH_MS = 1000
 const RESIZE_DEBOUNCE_MS = 250
@@ -560,7 +565,7 @@ export class LayoutService {
 
   private async saveWorkspaceSettings(
     state: WorkspaceTabState,
-    fields: { name: string, minPaneWidth: number | null, minPaneHeight: number | null, launchOnStartup: boolean, color: string }
+    fields: { name: string, minPaneWidth: number | null, minPaneHeight: number | null, launchOnStartup: boolean, color: string, folder: string }
   ): Promise<void> {
     const workspace = this.workspaces.getWorkspace(state.workspaceId)
     if (!workspace) return
@@ -574,6 +579,8 @@ export class LayoutService {
     else workspace.launchOnStartup = false
     if (fields.color) workspace.color = fields.color
     else delete workspace.color
+    if (fields.folder.trim()) workspace.folder = fields.folder.trim()
+    else delete workspace.folder
     await this.workspaces.saveWorkspaceQuietly(workspace)
     state.split.setTitle(workspace.name)
     // No colour: clear it, so a colour removed here doesn't stay on the tab
@@ -720,7 +727,12 @@ export class LayoutService {
       this.render(state, true)
     })
     wsButton.append(this.node('span', 'pw-ws-name', workspace.name), this.node('span', 'pw-caret', state.menuOpen ? '▴' : '▾'))
-    header.append(wsButton, toggle)
+    const folder = this.workspaces.projectFolder(workspace)
+    const code = this.button('pw-icon-btn pw-code', '',
+      folder ? `Open ${folder.path} in VS Code` : 'Open in VS Code (no project folder yet: set one in the workspace menu)',
+      () => this.workspaces.openInVsCode(workspace))
+    code.innerHTML = ICON_CODE
+    header.append(wsButton, code, toggle)
     el.append(header)
     if (state.menuOpen) el.append(this.workspaceMenu(state, workspace))
 
@@ -939,10 +951,14 @@ export class LayoutService {
     const startupLabel = this.node('label', 'pw-check')
     startupLabel.append(startup, this.node('span', '', 'Open when Tabby starts'))
     const tabColor = this.colorPicker(workspace.color ?? '')
+    const firstPaneFolder = workspace.panes.find((p) => p.cwd?.trim())?.cwd?.trim()
+    const folder = this.input('text', workspace.folder ?? '', firstPaneFolder || 'C:\\path or /home/user')
 
     box.append(
       this.field('Name', name),
       this.field('Tab colour', tabColor.element),
+      this.field('Project folder', folder),
+      this.node('div', 'pw-hint', 'Opened by the VS Code button. Empty: the first pane folder.'),
       this.field('Minimum pane size', size),
       this.node('div', 'pw-hint', '"View all" fits as many switched-on panes as this size allows.'),
       startupLabel,
@@ -953,8 +969,9 @@ export class LayoutService {
       minPaneHeight: Number(minH.value) || null,
       launchOnStartup: startup.checked,
       color: tabColor.value(),
+      folder: folder.value,
     })
-    for (const field of [name, minW, minH]) {
+    for (const field of [name, folder, minW, minH]) {
       field.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') save()
         if (e.key === 'Escape') { state.menuOpen = false; this.render(state, true) }
@@ -1104,6 +1121,7 @@ export class LayoutService {
         background: none; border: none; opacity: .6; cursor: pointer; padding: 2px 6px; line-height: 1; font-size: 13px;
       }
       .paneworks-sidebar .pw-icon-btn:hover { opacity: 1; }
+      .paneworks-sidebar .pw-code { display: flex; align-items: center; }
       .paneworks-sidebar.collapsed .pw-toggle { margin-top: 8px; }
 
       .paneworks-sidebar .pw-header { display: flex; align-items: center; padding: 6px 4px 4px 4px; }

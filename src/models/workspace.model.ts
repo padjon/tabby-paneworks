@@ -89,6 +89,8 @@ export interface Workspace {
   minPaneWidth?: number
   minPaneHeight?: number
   launchOnStartup?: boolean
+  /** Project folder for "Open in VS Code"; none = the first pane folder. */
+  folder?: string
 }
 
 export const DEFAULT_MIN_PANE_WIDTH = 600

@@ -1,4 +1,5 @@
 import { Injectable } from '@angular/core'
+import { spawn } from 'child_process'
 import { ConfigService, NotificationsService, ProfilesService } from 'tabby-core'
 import {
   Workspace,
@@ -330,6 +331,63 @@ export class WorkspaceEditorService {
   }
 
   /** Detects WSL profiles by ID prefix (built-in) or command path (user-defined). */
+  // ---------- VS Code ----------
+
+  /**
+   * The project folder: the workspace's own folder, else the first pane folder (usually the
+   * project's working directory). For a Unix path on Windows, the WSL distro to open it in
+   * (from the pane's profile; null = WSL's default distro).
+   */
+  projectFolder(workspace: Workspace): { path: string, wsl: boolean, distro: string | null } | null {
+    const pane = workspace.panes.find((p) => p.cwd?.trim())
+    const path = workspace.folder?.trim() || pane?.cwd?.trim()
+    if (!path) return null
+    const wsl = process.platform === 'win32' && path.startsWith('/')
+    if (!wsl) return { path, wsl, distro: null }
+    // The distro of the first WSL pane (the folder's own pane first)
+    const panes = pane ? [pane, ...workspace.panes] : workspace.panes
+    for (const p of panes) {
+      const profile = this.getProfileById(p.profileId)
+      if (profile && this.isWslProfile(profile)) {
+        return { path, wsl, distro: this.wslDistro(profile) }
+      }
+    }
+    return { path, wsl, distro: null }
+  }
+
+  /** Opens the project folder in VS Code (`code` on PATH; WSL folders through WSL's `code`). */
+  async openInVsCode(workspace: Workspace): Promise<void> {
+    await this.getCachedProfiles() // built-in WSL profiles (for the distro) come from there
+    const folder = this.projectFolder(workspace)
+    if (!folder) {
+      this.notifications.info('No project folder: set one in the workspace menu, or a folder on a pane')
+      return
+    }
+    const quote = (s: string) => `"${s.replace(/"/g, '\\"')}"`
+    const command = folder.wsl
+      ? `wsl.exe ${folder.distro ? `-d ${quote(folder.distro)} ` : ''}--cd ${quote(folder.path)} code .`
+      : `code ${quote(folder.path)}`
+    try {
+      const child = spawn(command, { shell: true, detached: true, stdio: 'ignore', windowsHide: true })
+      child.on('error', () => this.vsCodeFailed())
+      child.on('exit', (code) => { if (code) this.vsCodeFailed() })
+      child.unref()
+    } catch {
+      this.vsCodeFailed()
+    }
+  }
+
+  private vsCodeFailed(): void {
+    this.notifications.error('Could not start VS Code. Is the "code" command on your PATH?')
+  }
+
+  /** `wsl.exe -d Ubuntu` / `--distribution Ubuntu` → Ubuntu; null when the profile uses the default. */
+  private wslDistro(profile: TabbyProfile): string | null {
+    const args = profile.options?.args ?? []
+    const i = args.findIndex((a) => a === '-d' || a === '--distribution')
+    return i >= 0 && args[i + 1] ? args[i + 1] : null
+  }
+
   private isWslProfile(profile: TabbyProfile): boolean {
     // Built-in WSL profiles: id starts with 'local:wsl'
     if (profile.id?.startsWith('local:wsl')) {
