@@ -159,6 +159,16 @@ export class LayoutService {
 
   // ---------- attaching to a workspace tab ----------
 
+  /**
+   * Tab colour from the workspace, applied whenever the tab attaches (opened, or recovered
+   * after a restart, where Tabby doesn't keep tab colours). A workspace without a colour
+   * leaves the tab alone, so a colour set from Tabby's tab menu stays until the next restart.
+   */
+  private applyTabColor(state: WorkspaceTabState): void {
+    const color = this.workspaces.getWorkspace(state.workspaceId)?.color
+    if (color) state.split.color = color
+  }
+
   private attach(split: SplitTabComponent, workspaceId: string): void {
     const existing = this.states.get(split)
     if (existing) {
@@ -185,6 +195,7 @@ export class LayoutService {
     this.states.set(split, state)
     this.active.add(state)
     this.loadProfiles()
+    this.applyTabColor(state)
 
     split.destroyed$.subscribe(() => {
       // Parked panes are outside the split: close them with it
@@ -549,7 +560,7 @@ export class LayoutService {
 
   private async saveWorkspaceSettings(
     state: WorkspaceTabState,
-    fields: { name: string, minPaneWidth: number | null, minPaneHeight: number | null, launchOnStartup: boolean }
+    fields: { name: string, minPaneWidth: number | null, minPaneHeight: number | null, launchOnStartup: boolean, color: string }
   ): Promise<void> {
     const workspace = this.workspaces.getWorkspace(state.workspaceId)
     if (!workspace) return
@@ -561,8 +572,12 @@ export class LayoutService {
     }
     if (fields.launchOnStartup) workspace.launchOnStartup = true
     else workspace.launchOnStartup = false
+    if (fields.color) workspace.color = fields.color
+    else delete workspace.color
     await this.workspaces.saveWorkspaceQuietly(workspace)
     state.split.setTitle(workspace.name)
+    // No colour: clear it, so a colour removed here doesn't stay on the tab
+    state.split.color = workspace.color || null
     state.menuOpen = false
     if (state.view.kind === 'all') await this.showAll(state)
     else this.render(state, true)
@@ -839,8 +854,46 @@ export class LayoutService {
     }
     profile.value = pane.profileId ?? ''
 
-    // Label colour: presets, a custom picker, or none
-    let chosen = pane.color ?? ''
+    const colors = this.colorPicker(pane.color ?? '')
+
+    box.append(
+      this.field('Name', name),
+      this.field('Label colour', colors.element),
+      this.field('Startup command', command),
+      this.field('Folder', cwd),
+      this.field('Profile', profile),
+      this.node('div', 'pw-hint', 'Command, folder and profile apply when the pane (re)starts.'),
+    )
+    const save = () => this.savePane(state, pane.id, {
+      name: name.value.trim(),
+      color: colors.value(),
+      startupCommand: command.value.trim(),
+      cwd: cwd.value.trim(),
+      profileId: profile.value,
+    })
+    for (const field of [name, command, cwd]) {
+      field.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') save()
+        if (e.key === 'Escape') { state.editingPaneId = null; this.render(state, true) }
+      })
+    }
+    const actions = this.node('div', 'pw-actions')
+    actions.append(
+      this.button('pw-btn primary', 'Save', 'Save the pane settings', save),
+      this.button('pw-btn', 'Restart', 'Save, then close and start the pane again', async () => {
+        await save()
+        await this.restartPane(state, pane.id)
+      }),
+      this.button('pw-btn danger', 'Remove', 'Remove the pane from the workspace', () => this.removePane(state, pane.id)),
+    )
+    box.append(actions)
+    setTimeout(() => name.focus(), 0)
+    return box
+  }
+
+  /** Colour choice: presets, a custom picker, or none (''). */
+  private colorPicker(initial: string): { element: HTMLElement, value: () => string } {
+    let chosen = initial
     const colors = this.node('div', 'pw-colors')
     const custom = document.createElement('input')
     custom.type = 'color'
@@ -868,40 +921,7 @@ export class LayoutService {
     })
     colors.append(custom)
     paint()
-
-    box.append(
-      this.field('Name', name),
-      this.field('Label colour', colors),
-      this.field('Startup command', command),
-      this.field('Folder', cwd),
-      this.field('Profile', profile),
-      this.node('div', 'pw-hint', 'Command, folder and profile apply when the pane (re)starts.'),
-    )
-    const save = () => this.savePane(state, pane.id, {
-      name: name.value.trim(),
-      color: chosen,
-      startupCommand: command.value.trim(),
-      cwd: cwd.value.trim(),
-      profileId: profile.value,
-    })
-    for (const field of [name, command, cwd]) {
-      field.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') save()
-        if (e.key === 'Escape') { state.editingPaneId = null; this.render(state, true) }
-      })
-    }
-    const actions = this.node('div', 'pw-actions')
-    actions.append(
-      this.button('pw-btn primary', 'Save', 'Save the pane settings', save),
-      this.button('pw-btn', 'Restart', 'Save, then close and start the pane again', async () => {
-        await save()
-        await this.restartPane(state, pane.id)
-      }),
-      this.button('pw-btn danger', 'Remove', 'Remove the pane from the workspace', () => this.removePane(state, pane.id)),
-    )
-    box.append(actions)
-    setTimeout(() => name.focus(), 0)
-    return box
+    return { element: colors, value: () => chosen }
   }
 
   private workspaceMenu(state: WorkspaceTabState, workspace: Workspace): HTMLElement {
@@ -918,9 +938,11 @@ export class LayoutService {
     startup.checked = !!workspace.launchOnStartup
     const startupLabel = this.node('label', 'pw-check')
     startupLabel.append(startup, this.node('span', '', 'Open when Tabby starts'))
+    const tabColor = this.colorPicker(workspace.color ?? '')
 
     box.append(
       this.field('Name', name),
+      this.field('Tab colour', tabColor.element),
       this.field('Minimum pane size', size),
       this.node('div', 'pw-hint', '"View all" fits as many switched-on panes as this size allows.'),
       startupLabel,
@@ -930,6 +952,7 @@ export class LayoutService {
       minPaneWidth: Number(minW.value) || null,
       minPaneHeight: Number(minH.value) || null,
       launchOnStartup: startup.checked,
+      color: tabColor.value(),
     })
     for (const field of [name, minW, minH]) {
       field.addEventListener('keydown', (e) => {
